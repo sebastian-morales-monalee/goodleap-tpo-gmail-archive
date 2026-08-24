@@ -24,6 +24,10 @@ const POSTHOG_SYNC_CONFIG = {
   SHEET_NAME: 'PostHog Projects',
   SOURCE_SHEET_NAME: 'Emails',
   SOURCE_APPLICATION_ID_HEADER: 'Case ID',
+  ATTACHMENTS_SHEET_NAME: 'Attachments',
+  ATTACHMENT_APPLICATION_ID_HEADER: 'Case ID',
+  ATTACHMENT_FILENAME_HEADER: 'Original Filename',
+  ATTACHMENT_URL_HEADER: 'Drive URL',
 
   // PostHog schema discovery confirms that the financier table contains the
   // Application ID and its related Artemis project ID directly.
@@ -58,6 +62,18 @@ const POSTHOG_PROPERTY_KEYS = {
 };
 
 const POSTHOG_PROJECT_HEADERS = [
+  'Application ID',
+  'Project ID',
+  'Project URL',
+  'Attachment Links',
+  'Source Updated At',
+  'Last Synced At',
+  'Match Status',
+  'Match Count',
+  'Error',
+];
+
+const LEGACY_POSTHOG_PROJECT_HEADERS = [
   'Application ID',
   'Project ID',
   'Project URL',
@@ -371,10 +387,15 @@ function syncPostHogProjects() {
     const emailsSheet = resources.spreadsheet.getSheetByName(
       POSTHOG_SYNC_CONFIG.SOURCE_SHEET_NAME,
     );
+    const attachmentsSheet = resources.spreadsheet.getSheetByName(
+      POSTHOG_SYNC_CONFIG.ATTACHMENTS_SHEET_NAME,
+    );
     const projectsSheet = getOrCreatePostHogProjectsSheet_(
       resources.spreadsheet,
     );
     const applicationIds = loadUniquePostHogApplicationIds_(emailsSheet);
+    const attachmentLinksByApplicationId =
+      loadPostHogAttachmentLinks_(attachmentsSheet);
 
     if (applicationIds.length === 0) {
       console.log('No Case IDs were found. Nothing was synchronized.');
@@ -441,6 +462,9 @@ function syncPostHogProjects() {
 
     const outputRows = applicationIds.map((applicationId) => {
       const previous = previousRows.get(applicationId) || null;
+      const attachmentLinks =
+        attachmentLinksByApplicationId.get(applicationId) || [];
+      const attachmentText = buildPostHogAttachmentText_(attachmentLinks);
       const validationError = invalidIdErrors.get(applicationId) || '';
       const queryError = queryErrorsByApplicationId.get(applicationId) || '';
       const error = validationError || queryError;
@@ -451,6 +475,7 @@ function syncPostHogProjects() {
           applicationId,
           previous ? previous.projectId : '',
           previous ? previous.projectUrl : '',
+          attachmentText,
           previous ? previous.sourceUpdatedAt : '',
           syncedAt,
           'Error',
@@ -467,6 +492,7 @@ function syncPostHogProjects() {
           applicationId,
           '',
           '',
+          attachmentText,
           '',
           syncedAt,
           'Not Found',
@@ -481,6 +507,7 @@ function syncPostHogProjects() {
           applicationId,
           matches[0].projectId,
           matches[0].projectUrl,
+          attachmentText,
           matches[0].sourceUpdatedAt,
           syncedAt,
           'Matched',
@@ -494,6 +521,7 @@ function syncPostHogProjects() {
         applicationId,
         matches.map((match) => match.projectId).join('\n'),
         matches.map((match) => match.projectUrl).join('\n'),
+        attachmentText,
         matches[0].sourceUpdatedAt,
         syncedAt,
         'Multiple Matches',
@@ -503,6 +531,11 @@ function syncPostHogProjects() {
     });
 
     rewritePostHogProjectRows_(projectsSheet, outputRows);
+    applyPostHogAttachmentLinks_(
+      projectsSheet,
+      applicationIds,
+      attachmentLinksByApplicationId,
+    );
     SpreadsheetApp.flush();
 
     console.log(JSON.stringify(stats, null, 2));
@@ -742,6 +775,8 @@ function getPostHogSettings_() {
 }
 
 function getOrCreatePostHogProjectsSheet_(spreadsheet) {
+  migratePostHogProjectsSheetSchema_(spreadsheet);
+
   const sheet = getOrCreateSheet_(
     spreadsheet,
     POSTHOG_SYNC_CONFIG.SHEET_NAME,
@@ -752,16 +787,64 @@ function getOrCreatePostHogProjectsSheet_(spreadsheet) {
   sheet.setColumnWidth(1, 150);
   sheet.setColumnWidth(2, 280);
   sheet.setColumnWidth(3, 420);
-  sheet.setColumnWidth(4, 170);
+  sheet.setColumnWidth(4, 420);
   sheet.setColumnWidth(5, 170);
-  sheet.setColumnWidth(6, 150);
-  sheet.setColumnWidth(7, 100);
-  sheet.setColumnWidth(8, 420);
-  sheet.getRange('D:E').setNumberFormat('yyyy-mm-dd hh:mm:ss');
-  sheet.getRange('B:C').setWrap(true);
-  sheet.getRange('H:H').setWrap(true);
+  sheet.setColumnWidth(6, 170);
+  sheet.setColumnWidth(7, 150);
+  sheet.setColumnWidth(8, 100);
+  sheet.setColumnWidth(9, 420);
+  sheet.getRange('E:F').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sheet.getRange('B:D').setWrap(true);
+  sheet.getRange('I:I').setWrap(true);
 
   return sheet;
+}
+
+/**
+ * Upgrades the original eight-column derived sheet by inserting the new
+ * Attachment Links column. The exact legacy header sequence must match before
+ * any structural change is made, so rerunning setup cannot insert duplicates.
+ */
+function migratePostHogProjectsSheetSchema_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(POSTHOG_SYNC_CONFIG.SHEET_NAME);
+
+  if (!sheet || sheet.getLastRow() === 0) {
+    return;
+  }
+
+  const headerCount = Math.max(
+    LEGACY_POSTHOG_PROJECT_HEADERS.length,
+    Math.min(sheet.getLastColumn(), POSTHOG_PROJECT_HEADERS.length),
+  );
+  const existingHeaders = sheet
+    .getRange(1, 1, 1, headerCount)
+    .getDisplayValues()[0];
+  const alreadyCurrent = POSTHOG_PROJECT_HEADERS.every(
+    (header, index) => existingHeaders[index] === header,
+  );
+
+  if (alreadyCurrent) {
+    return;
+  }
+
+  const isLegacy = LEGACY_POSTHOG_PROJECT_HEADERS.every(
+    (header, index) => existingHeaders[index] === header,
+  );
+
+  if (!isLegacy) {
+    return;
+  }
+
+  sheet.insertColumnBefore(4);
+  sheet
+    .getRange(1, 4)
+    .setValue(POSTHOG_PROJECT_HEADERS[3])
+    .setFontWeight('bold')
+    .setBackground('#6e04bd')
+    .setFontColor('#ffffff');
+  console.log(
+    'PostHog Projects schema upgraded: Attachment Links was inserted as column D.',
+  );
 }
 
 function loadUniquePostHogApplicationIds_(emailsSheet) {
@@ -802,6 +885,88 @@ function loadUniquePostHogApplicationIds_(emailsSheet) {
   });
 
   return Array.from(uniqueIds).sort();
+}
+
+/**
+ * Groups every saved Drive attachment by Case ID. Column positions are found
+ * from their headers so the lookup does not depend on hard-coded indexes.
+ */
+function loadPostHogAttachmentLinks_(attachmentsSheet) {
+  if (!attachmentsSheet) {
+    throw new Error(
+      `Required sheet not found: ${POSTHOG_SYNC_CONFIG.ATTACHMENTS_SHEET_NAME}.`,
+    );
+  }
+
+  if (attachmentsSheet.getLastRow() < 2) {
+    return new Map();
+  }
+
+  const headers = attachmentsSheet
+    .getRange(1, 1, 1, attachmentsSheet.getLastColumn())
+    .getDisplayValues()[0];
+  const applicationIdIndex = headers.indexOf(
+    POSTHOG_SYNC_CONFIG.ATTACHMENT_APPLICATION_ID_HEADER,
+  );
+  const filenameIndex = headers.indexOf(
+    POSTHOG_SYNC_CONFIG.ATTACHMENT_FILENAME_HEADER,
+  );
+  const urlIndex = headers.indexOf(
+    POSTHOG_SYNC_CONFIG.ATTACHMENT_URL_HEADER,
+  );
+  const requiredIndexes = [applicationIdIndex, filenameIndex, urlIndex];
+
+  if (requiredIndexes.some((index) => index < 0)) {
+    throw new Error(
+      'The Attachments sheet is missing one or more required headers: ' +
+      `${POSTHOG_SYNC_CONFIG.ATTACHMENT_APPLICATION_ID_HEADER}, ` +
+      `${POSTHOG_SYNC_CONFIG.ATTACHMENT_FILENAME_HEADER}, ` +
+      `${POSTHOG_SYNC_CONFIG.ATTACHMENT_URL_HEADER}.`,
+    );
+  }
+
+  const values = attachmentsSheet
+    .getRange(
+      2,
+      1,
+      attachmentsSheet.getLastRow() - 1,
+      attachmentsSheet.getLastColumn(),
+    )
+    .getDisplayValues();
+  const linksByApplicationId = new Map();
+  const seenUrlsByApplicationId = new Map();
+
+  values.forEach((row) => {
+    const applicationId = String(row[applicationIdIndex] || '').trim();
+    const url = String(row[urlIndex] || '').trim();
+
+    if (
+      !applicationId ||
+      applicationId === 'NO_CASE_ID' ||
+      !/^https:\/\//i.test(url)
+    ) {
+      return;
+    }
+
+    if (!linksByApplicationId.has(applicationId)) {
+      linksByApplicationId.set(applicationId, []);
+      seenUrlsByApplicationId.set(applicationId, new Set());
+    }
+
+    const seenUrls = seenUrlsByApplicationId.get(applicationId);
+    if (seenUrls.has(url)) {
+      return;
+    }
+
+    seenUrls.add(url);
+    const filename = sanitizePostHogAttachmentLabel_(
+      row[filenameIndex],
+      linksByApplicationId.get(applicationId).length + 1,
+    );
+    linksByApplicationId.get(applicationId).push({filename, url});
+  });
+
+  return linksByApplicationId;
 }
 
 function fetchPostHogProjectMatches_(applicationIds) {
@@ -994,8 +1159,8 @@ function loadExistingPostHogProjectRows_(sheet) {
     rowsByApplicationId.set(applicationId, {
       projectId: row[1],
       projectUrl: row[2],
-      sourceUpdatedAt: row[3],
-      matchCount: Number(row[6]) || 0,
+      sourceUpdatedAt: row[4],
+      matchCount: Number(row[7]) || 0,
     });
   });
 
@@ -1006,6 +1171,7 @@ function buildPostHogOutputRow_(
   applicationId,
   projectId,
   projectUrl,
+  attachmentText,
   sourceUpdatedAt,
   syncedAt,
   status,
@@ -1016,12 +1182,58 @@ function buildPostHogOutputRow_(
     applicationId,
     projectId,
     projectUrl,
+    attachmentText,
     sourceUpdatedAt,
     syncedAt,
     status,
     matchCount,
     error,
   ].map((value) => safeCellValue_(value));
+}
+
+function sanitizePostHogAttachmentLabel_(value, fallbackIndex) {
+  const cleaned = String(value || '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+  return truncatePostHogText_(cleaned || `Attachment ${fallbackIndex}`, 500);
+}
+
+function buildPostHogAttachmentText_(links) {
+  return links.map((link) => link.filename).join('\n');
+}
+
+/**
+ * Converts the attachment display text in column D into per-file rich-text
+ * hyperlinks. Multiple files remain independently clickable within one cell.
+ */
+function applyPostHogAttachmentLinks_(
+  sheet,
+  applicationIds,
+  linksByApplicationId,
+) {
+  if (applicationIds.length === 0) {
+    return;
+  }
+
+  const richTextRows = applicationIds.map((applicationId) => {
+    const links = linksByApplicationId.get(applicationId) || [];
+    const text = buildPostHogAttachmentText_(links);
+    const builder = SpreadsheetApp.newRichTextValue().setText(text);
+    let startOffset = 0;
+
+    links.forEach((link, index) => {
+      const endOffset = startOffset + link.filename.length;
+      builder.setLinkUrl(startOffset, endOffset, link.url);
+      startOffset = endOffset + (index < links.length - 1 ? 1 : 0);
+    });
+
+    return [builder.build()];
+  });
+
+  sheet
+    .getRange(2, 4, richTextRows.length, 1)
+    .setRichTextValues(richTextRows)
+    .setWrap(true);
 }
 
 function rewritePostHogProjectRows_(sheet, rows) {

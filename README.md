@@ -112,6 +112,8 @@ It:
 - Looks up the Artemis Sales Project ID.
 - Constructs the Artemis project URL.
 - Creates and maintains the `PostHog Projects` sheet automatically.
+- Adds every saved Drive attachment to `PostHog Projects` as a clickable
+  filename, with multiple files displayed on separate lines.
 - Preserves the previous matched value if a temporary API error occurs.
 - Reports `Matched`, `Not Found`, `Multiple Matches`, or `Error` explicitly.
 - Looks up new Application IDs immediately after new mail is archived.
@@ -340,6 +342,26 @@ The derived sheet contains one row per unique Case ID. Do not add manual
 columns or notes to this tab because its data area is rewritten during each
 successful sync.
 
+Its managed columns are:
+
+| Column | Value |
+| --- | --- |
+| `Application ID` | Case ID read from `Emails` |
+| `Project ID` | Artemis project identifier returned by PostHog |
+| `Project URL` | Direct Artemis proposal URL |
+| `Attachment Links` | Clickable Drive filenames read from `Attachments` |
+| `Source Updated At` | PostHog warehouse update time |
+| `Last Synced At` | Most recent reconciliation time |
+| `Match Status` | `Matched`, `Not Found`, `Multiple Matches`, or `Error` |
+| `Match Count` | Number of unique PostHog project matches |
+| `Error` | Validation, query, or review detail |
+
+Attachment links are matched by `Attachments.Case ID` to
+`PostHog Projects.Application ID`. Duplicate Drive URLs are suppressed. A row
+can show attachments even when its PostHog status is `Not Found`. Drive access
+continues to follow the file and folder permissions already configured in
+Google Drive.
+
 ### 6. Enable the hybrid schedule
 
 Only after the first manual sync is correct, run:
@@ -383,6 +405,22 @@ Do not manually edit or delete the old managed triggers before step 3. The
 installer removes every legacy or duplicate instance itself, while leaving
 unrelated triggers untouched.
 
+### Adding Attachment Links to an existing installation
+
+For an installation that already has `PostHog Projects` with the original
+eight-column layout:
+
+1. Replace only `PostHogSync.gs` with the updated repository version and save.
+2. Run `setupPostHogProjectSync()` once. It detects the exact legacy header
+   sequence and inserts `Attachment Links` as column D automatically.
+3. Run `syncPostHogProjects()` once to populate historical attachment links.
+4. Verify at least one row with a single file and one with multiple files.
+5. Confirm that the existing five-minute and hourly triggers remain present.
+
+Do not insert the column manually and do not reinstall the triggers. The setup
+function is idempotent: after migration, later executions validate the current
+nine-column structure without adding another column.
+
 To remove only the hourly fallback, run:
 
 ```text
@@ -399,7 +437,7 @@ stop all PostHog calls while keeping Gmail automation, run
   Gmail messages.
 - New attachments and message metadata are archived in Drive and Sheets.
 - When new messages were archived, `PostHogSync.gs` immediately refreshes the
-  derived project lookup.
+  derived project lookup and its Drive attachment links.
 - Every hour, `PostHogSync.gs` performs the same reconciliation as a fallback.
 - Both workflows use the same Apps Script lock, preventing overlapping writes.
 - Empty Gmail checks do not create PostHog requests.
