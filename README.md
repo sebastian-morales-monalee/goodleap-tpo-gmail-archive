@@ -1,0 +1,502 @@
+# GoodLeap TPO Gmail Archive
+
+This project automates the collection and indexing of GoodLeap TPO email
+messages, saves their attachments in Google Drive, and enriches the archive
+with the corresponding Artemis Sales Project ID from PostHog.
+
+The implementation is designed for a standalone Google Apps Script project.
+No web-app deployment is required.
+
+## Architecture
+
+```text
+GoodLeap Google Group
+        |
+        v
+User Gmail mailbox
+        |
+        v
+Integrated trigger (every 5 minutes)
+        |
+        +-------------------------> Code.gs -> Drive + archive sheets
+        |
+        +--- only after new mail -> PostHogSync.gs -> PostHog Projects
+                                             ^
+                                             |
+                              Hourly reconciliation fallback
+```
+
+`ManualBackfill.gs` is a one-time controlled path for the four historical
+messages that were forwarded manually and therefore did not match the normal
+Google Group delivery rules.
+
+## Deployment assumptions
+
+- The Google account that runs setup must receive the GoodLeap group messages
+  in its own Gmail mailbox. Group membership alone is not sufficient if the
+  messages are not delivered to that mailbox.
+- Matching messages must include an attachment and satisfy the configured
+  Gmail query.
+- The operating account must be allowed to create files in My Drive,
+  spreadsheets, Gmail labels, and installable Apps Script triggers.
+- The operator must have access to the target PostHog environment and
+  permission to create a Personal API Key for it.
+- Installable triggers run as the Google account that creates them. A new owner
+  must run the final trigger installer while signed in as the account that will
+  operate the archive.
+- A fresh independent deployment should use a new standalone Apps Script
+  project and copy only the source files. Do not reuse another deployment's
+  generated `GOODLEAP_ROOT_FOLDER_ID` or `GOODLEAP_SPREADSHEET_ID` values.
+- No deployment, Apps Script library, advanced Google service, or separate
+  Google Cloud project is required.
+
+## Files
+
+### `Code.gs`
+
+The primary Gmail archive workflow.
+
+It:
+
+- Searches Gmail for messages sent to `goodleap-tpo@artemispower.com` with
+  attachments.
+- Extracts the Case ID and production fields from each message.
+- Creates a `year/month/Case ID` folder hierarchy in Google Drive.
+- Saves attachments and, when enabled, a plain-text copy of the email body.
+- Maintains the `Emails`, `Attachments`, and `Errors` sheets.
+- Deduplicates Gmail messages by Gmail Message ID.
+- Deduplicates attachments by message, attachment index, and SHA-1 hash.
+- Can install the initial Gmail-only five-minute trigger before PostHog is
+  configured.
+
+Primary functions:
+
+1. `setupGoodLeapArchive()`
+2. `previewGoodLeapMatches()`
+3. `processGoodLeapHistory()`
+4. `processRecentGoodLeapEmails()`
+5. `installGoodLeapTrigger()`
+6. `removeGoodLeapTrigger()`
+
+### `ManualBackfill.gs`
+
+A controlled, one-time importer for these four forwarded messages:
+
+- `26-42-004485`
+- `26-30-001387`
+- `26-44-005345`
+- `26-44-005256`
+
+It does not modify the normal Gmail query and does not install a trigger. It
+requires the Gmail label `GoodLeap/ManualBackfill` to be applied only to the
+approved forwarded messages. It validates the original sender, subject, date,
+attachment presence, and expected Case ID before writing anything.
+
+Primary functions:
+
+1. `setupGoodLeapManualBackfill()`
+2. `previewGoodLeapManualBackfill()`
+3. `processGoodLeapManualBackfill()`
+
+Run this workflow only when a reviewed historical backfill is required.
+
+### `PostHogSync.gs`
+
+The PostHog enrichment workflow.
+
+It:
+
+- Reads unique Case IDs from the `Emails` sheet.
+- Treats each Case ID as a candidate GoodLeap Financier Application ID.
+- Queries PostHog through the private HogQL query API.
+- Looks up the Artemis Sales Project ID.
+- Constructs the Artemis project URL.
+- Creates and maintains the `PostHog Projects` sheet automatically.
+- Preserves the previous matched value if a temporary API error occurs.
+- Reports `Matched`, `Not Found`, `Multiple Matches`, or `Error` explicitly.
+- Looks up new Application IDs immediately after new mail is archived.
+- Retains a separate hourly reconciliation for delayed warehouse records and
+  existing mappings.
+
+The default warehouse mapping is:
+
+| Business meaning | PostHog warehouse value |
+| --- | --- |
+| Financier Application ID | `goodleap_postgres_financiers.application_id` |
+| Artemis Sales Project ID | `goodleap_postgres_financiers.project_id` |
+| Project URL | `https://goodleap.artemis.solar/projects/{id}/proposal` |
+
+The table and fields were confirmed through PostHog's metadata-only
+`DatabaseSchemaQuery`. The GoodLeap URL shape is consistent with existing
+project records in this repository. The returned row values must still be
+confirmed with `previewPostHogProjectMatches()` before the automated trigger is
+installed.
+
+Primary functions:
+
+1. `setupPostHogProjectSync()`
+2. `testPostHogConnection()`
+3. `inspectPostHogGoodLeapProjectSchema()`
+4. `inspectPostHogGoodLeapDatabaseSchema()`
+5. `previewPostHogProjectMatches()`
+6. `syncPostHogProjects()`
+7. `processRecentGoodLeapEmailsAndSyncPostHog()`
+8. `installHybridGoodLeapPostHogTriggers()`
+9. `installPostHogSyncTrigger()`
+10. `removePostHogSyncTrigger()`
+
+## Script Properties
+
+Open the Apps Script project, select **Project Settings**, and use the
+**Script properties** section. Do not put these values in source code or in a
+spreadsheet.
+
+`.env.example` documents the available property names and safe example values.
+Apps Script does not load `.env` files, so the required values must still be
+added through **Project Settings > Script Properties**. Never place a real
+Personal API Key in `.env.example` or commit a populated `.env` file.
+
+### Obtain the three PostHog values
+
+1. Sign in to PostHog and open the environment that contains the GoodLeap
+   warehouse tables.
+2. Obtain `POSTHOG_HOST` from the origin shown in the browser address bar:
+   - US Cloud private API: `https://us.posthog.com`
+   - EU Cloud private API: `https://eu.posthog.com`
+   - Self-hosted: the origin of the self-hosted PostHog instance
+3. Obtain `POSTHOG_PROJECT_ID` from the numeric segment in the environment URL.
+   For example, `https://us.posthog.com/project/123456/home` uses `123456`.
+4. Open **Settings > User > Personal API keys**. The direct US Cloud page is
+   <https://us.posthog.com/settings/user-api-keys>.
+5. Select **Create a personal API key**, give it a purpose-specific name such
+   as `GoodLeap Apps Script read-only sync`, and grant only `query:read`.
+6. Restrict organization/project access to the intended environment when that
+   option is available.
+7. Create the key and copy its `phx_...` value immediately. PostHog does not
+   display the full value again after the page is refreshed.
+
+This integration uses PostHog's private query endpoint. Do not substitute the
+public project token used to capture events.
+
+Required properties:
+
+| Property | Example | Purpose |
+| --- | --- | --- |
+| `POSTHOG_HOST` | `https://us.posthog.com` | Private PostHog API origin |
+| `POSTHOG_PROJECT_ID` | `123456` | Numeric PostHog environment ID |
+| `POSTHOG_PERSONAL_API_KEY` | `phx_...` | Personal key with `query:read` |
+
+Optional properties:
+
+| Property | Default | Purpose |
+| --- | --- | --- |
+| `POSTHOG_GOODLEAP_LOOKUP_TABLE` | `goodleap_postgres_financiers` | Warehouse lookup table |
+| `POSTHOG_APPLICATION_ID_FIELD` | `application_id` | Financier Application ID field |
+| `POSTHOG_GOODLEAP_PROJECT_ID_FIELD` | `project_id` | Artemis Project ID field |
+| `POSTHOG_SOURCE_UPDATED_AT_FIELD` | `updated_at` | Source freshness field |
+| `POSTHOG_PROJECT_URL_PREFIX` | `https://goodleap.artemis.solar/projects/` | URL prefix |
+| `POSTHOG_PROJECT_URL_SUFFIX` | `/proposal` | URL suffix |
+
+Existing properties whose names start with `GOODLEAP_` are managed by
+`Code.gs` and must not be removed.
+
+Script Properties are not displayed in Sheets or committed with this source,
+but Apps Script project editors can access them. Restrict editor access and
+rotate the personal API key when access changes.
+
+To add them in Apps Script:
+
+1. Open **Project Settings** in the left sidebar.
+2. Under **Script Properties**, select **Add script property**.
+3. Add the three required key/value pairs exactly as named in the table above.
+4. Select **Save script properties**.
+5. Never add quotes around the values and never paste the key into a `.gs`
+   file, Sheet cell, execution log, screenshot, or chat.
+
+## First-time installation
+
+For a standard deployment using the confirmed GoodLeap/PostHog schema, the
+complete function order is:
+
+| Order | Function | Defined in | Purpose |
+| --- | --- | --- | --- |
+| 1 | `setupGoodLeapArchive()` | `Code.gs` | Create or reuse the Drive folder, spreadsheet, sheets, and Gmail labels |
+| 2 | `previewGoodLeapMatches()` | `Code.gs` | Inspect matching Gmail messages without writing archive data |
+| 3 | `processGoodLeapHistory()` | `Code.gs` | Import existing matching messages and attachments |
+| 4 | `setupPostHogProjectSync()` | `PostHogSync.gs` | Validate PostHog settings and create the derived sheet |
+| 5 | `testPostHogConnection()` | `PostHogSync.gs` | Verify the private API connection without writing project data |
+| 6 | `previewPostHogProjectMatches()` | `PostHogSync.gs` | Preview Application ID to Project ID matches |
+| 7 | `syncPostHogProjects()` | `PostHogSync.gs` | Write the first verified project synchronization |
+| 8 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+
+Google Apps Script loads every `.gs` file into one shared runtime namespace,
+but the editor's manual-run function selector is contextual to the currently
+open source file. To run a function manually, first select the file shown in
+the `Defined in` column, then select the function and click **Run**. Installed
+triggers and calls between functions use the shared runtime namespace and do
+not depend on which file is open in the editor.
+
+Stop after any failed validation and resolve it before continuing. The manual
+backfill and schema-inspection functions are exception workflows, not required
+steps for every new deployment.
+
+### 1. Create the Apps Script project
+
+Create a standalone Google Apps Script project and set its time zone to
+`America/Bogota`.
+
+Add three script files to the same project:
+
+- `Code.gs`
+- `ManualBackfill.gs`
+- `PostHogSync.gs`
+
+`README.md` is repository documentation and does not need to be pasted into
+the Apps Script editor.
+
+Before the first execution, review these values near the top of `Code.gs`:
+
+| Setting | Required review |
+| --- | --- |
+| `GROUP_EMAIL` | Leave unchanged only if the target group address is the same |
+| `GMAIL_QUERY` | Test this exact query in the target Gmail mailbox |
+| `BACKFILL_AFTER` | Set earlier than the oldest existing message that must be imported |
+| `TIMEZONE` | Keep aligned with the Apps Script project time zone |
+
+`BACKFILL_AFTER` uses `YYYY/MM/DD`. It controls only the historical import;
+the five-minute trigger uses the separate recent-message window.
+
+Add the three required PostHog Script Properties before running the PostHog
+functions. Do not manually add any `GOODLEAP_*` properties; setup creates those
+resource identifiers automatically.
+
+### 2. Initialize the Gmail archive
+
+Run these functions in order:
+
+1. `setupGoodLeapArchive()`
+2. `previewGoodLeapMatches()`
+3. Review the execution log.
+4. `processGoodLeapHistory()`
+5. Review Drive and the three generated sheets.
+
+Google will request Gmail, Drive, Sheets, and trigger permissions during the
+first executions. Approve them using the Google account whose Gmail mailbox
+receives the GoodLeap group messages.
+
+Do not install a trigger yet. The hybrid installer in the final step creates
+the complete schedule after both Gmail and PostHog have been validated.
+
+The default historical safety limit is 500 matching Gmail threads. If the
+preview or Gmail search indicates more than 500 matching threads, process the
+history in reviewed date windows or increase the limit only after evaluating
+Apps Script execution time and service quotas.
+
+Do not click **Deploy**. Time-based triggers run the automation.
+
+### 3. Run the historical forwarded-message patch, if needed
+
+1. Run `setupGoodLeapManualBackfill()`.
+2. In Gmail, apply `GoodLeap/ManualBackfill` only to the four approved
+   forwarded messages.
+3. Run `previewGoodLeapManualBackfill()`.
+4. Confirm that all four expected Case IDs are present exactly once.
+5. Run `processGoodLeapManualBackfill()`.
+6. Review Drive and Sheets, then remove the manual Gmail label if desired.
+
+Do not install a trigger for this one-time patch.
+
+### 4. Validate PostHog before writing project results
+
+Then run:
+
+1. `setupPostHogProjectSync()`
+2. Confirm that the `PostHog Projects` tab was created automatically.
+3. `testPostHogConnection()`
+4. Confirm that the log says `PostHog connection test passed.`
+5. `previewPostHogProjectMatches()`
+
+The preview is read-only. Review every `[MATCH]` line and compare at least one
+Application ID, Project ID, and project URL with the PostHog user interface.
+
+If the preview reports no matches, stop. Do not run the synchronization or
+install its trigger. Run `inspectPostHogGoodLeapProjectSchema()` and
+`inspectPostHogGoodLeapDatabaseSchema()` as metadata-only diagnostics. Inspect
+the logged candidate fields and correct the optional table or field Script
+Properties if the target environment uses a different schema.
+
+### 5. Run the first synchronization
+
+After the preview has been confirmed:
+
+1. Run `syncPostHogProjects()`.
+2. Open the `PostHog Projects` sheet.
+3. Review the `Match Status`, `Match Count`, and `Error` columns.
+4. Open at least one generated Project URL and confirm that it points to the
+   expected Artemis Sales project.
+5. Investigate every `Multiple Matches` or `Error` row before automation.
+
+The derived sheet contains one row per unique Case ID. Do not add manual
+columns or notes to this tab because its data area is rewritten during each
+successful sync.
+
+### 6. Enable the hybrid schedule
+
+Only after the first manual sync is correct, run:
+
+```text
+installHybridGoodLeapPostHogTriggers()
+```
+
+This safely removes legacy or duplicate triggers managed by this project and
+then creates exactly two:
+
+- `processRecentGoodLeapEmailsAndSyncPostHog` every five minutes;
+- `syncPostHogProjects` every hour.
+
+The five-minute coordinator always checks Gmail. It calls PostHog immediately
+only when at least one new message was archived. The hourly trigger retries
+Application IDs that may not yet have reached the PostHog warehouse and
+reconciles existing rows. The installer is idempotent and can be rerun without
+accumulating duplicate triggers.
+
+The Google account that runs this installer owns both triggers. Run it while
+signed in as the account whose Gmail mailbox will be monitored.
+
+`installPostHogSyncTrigger()` remains available when only the hourly fallback
+needs to be recreated. It does not replace the five-minute coordinator.
+
+### Migrating an existing two-trigger installation
+
+For a project that already has the original Gmail-only five-minute trigger and
+the PostHog hourly trigger:
+
+1. Replace both `Code.gs` and `PostHogSync.gs` with the updated files.
+2. Save the Apps Script project and wait until the save indicator completes.
+3. Run `installHybridGoodLeapPostHogTriggers()` once.
+4. Review the execution log and confirm that both new triggers were installed.
+5. Open **Triggers** and confirm that exactly these two managed handlers exist:
+   - `processRecentGoodLeapEmailsAndSyncPostHog`, every five minutes;
+   - `syncPostHogProjects`, every hour.
+
+Do not manually edit or delete the old managed triggers before step 3. The
+installer removes every legacy or duplicate instance itself, while leaving
+unrelated triggers untouched.
+
+To remove only the hourly fallback, run:
+
+```text
+removePostHogSyncTrigger()
+```
+
+The integrated five-minute trigger can still call PostHog after new mail. To
+stop all PostHog calls while keeping Gmail automation, run
+`removePostHogSyncTrigger()` and then `installGoodLeapTrigger()`.
+
+## Normal operation
+
+- Every five minutes, the coordinator asks `Code.gs` to check for new GoodLeap
+  Gmail messages.
+- New attachments and message metadata are archived in Drive and Sheets.
+- When new messages were archived, `PostHogSync.gs` immediately refreshes the
+  derived project lookup.
+- Every hour, `PostHogSync.gs` performs the same reconciliation as a fallback.
+- Both workflows use the same Apps Script lock, preventing overlapping writes.
+- Empty Gmail checks do not create PostHog requests.
+- The PostHog sync sends Application IDs only; it does not send email bodies,
+  attachments, addresses, or Drive links to PostHog.
+
+## Ready-for-operation checklist
+
+The deployment is ready only when all of the following are true:
+
+- `previewGoodLeapMatches()` finds the intended messages in the target mailbox.
+- Historical messages appear once in `Emails` and their files open from Drive.
+- `testPostHogConnection()` passes.
+- `previewPostHogProjectMatches()` returns at least one verified match.
+- `syncPostHogProjects()` populates Project IDs and valid Artemis URLs.
+- The **Triggers** page shows one
+  `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
+  `syncPostHogProjects` hourly trigger owned by the operating account.
+- There are no unresolved rows marked `Error` or unexplained
+  `Multiple Matches` in `PostHog Projects`.
+
+`Not Found` is allowed when the Application ID has not yet reached PostHog; the
+hourly reconciliation will retry it.
+
+## Replication in another account
+
+1. Confirm that the target account receives the group messages in Gmail and
+   can access the intended PostHog environment.
+2. Copy the three `.gs` files into a new standalone Apps Script project.
+3. Review the Gmail query, historical start date, and time zone.
+4. Obtain a new purpose-specific PostHog Personal API Key; do not reuse another
+   person's key.
+5. Add the three required PostHog Script Properties.
+6. Run the Gmail setup, preview, and historical import sequence.
+7. Run the PostHog setup, connection test, preview, and first synchronization.
+8. Use the schema inspection functions only if the default mapping fails in
+   the target environment.
+9. After both workflows have been validated, run
+   `installHybridGoodLeapPostHogTriggers()`.
+10. Confirm that exactly one integrated five-minute trigger and one hourly
+   PostHog trigger exist.
+
+All Drive folders, Sheets tabs, Gmail labels, and time-based triggers are
+created by setup functions. They do not need to be created manually.
+
+## Troubleshooting
+
+### HTTP 401 or 403 from PostHog
+
+- Verify that the key is a Personal API Key, not a public project token.
+- Verify that it has `query:read` access to the configured environment.
+- Verify `POSTHOG_PROJECT_ID` and `POSTHOG_HOST`.
+- If the key was rolled or deleted, update the Script Property.
+
+### The preview returns no matches
+
+- Run `inspectPostHogGoodLeapProjectSchema()`.
+- Run `inspectPostHogGoodLeapDatabaseSchema()` and review the candidate fields
+  and joins.
+- Confirm that `goodleap_postgres_financiers.application_id` represents the
+  Case ID format found in `Emails`.
+- If the warehouse mapping changes, update the optional lookup table or field
+  Script Properties and rerun the preview.
+- Do not install the PostHog trigger until at least one known project matches.
+
+### `Multiple Matches`
+
+More than one unique Artemis Project ID has the same Application ID. The sheet
+lists every matching ID and URL on separate lines. Review the source data; the
+script intentionally does not choose one silently.
+
+### Temporary API error
+
+The row is marked `Error`. If it had a previous successful match, the old
+Project ID and URL are preserved. Run `syncPostHogProjects()` again after the
+API or permission issue is resolved.
+
+### Another execution is running
+
+The run is skipped safely because the Gmail archive or another PostHog sync
+currently holds the shared Apps Script lock. The next scheduled run will retry.
+
+## Security and data handling
+
+- Never paste the PostHog Personal API Key into source code, Sheets, chat, or
+  screenshots.
+- Give the key only `query:read` and restrict it to the required PostHog
+  environment when possible.
+- Keep the Apps Script editor list limited because editors can access Script
+  Properties.
+- Rotate the key if its owner leaves the project or if exposure is suspected.
+- The scripts never delete, archive, or mark Gmail messages as read.
+- The scripts do not delete Drive files or archive sheets.
+
+## Reference documentation
+
+- [PostHog API overview](https://posthog.com/docs/api)
+- [PostHog Personal API keys](https://posthog.com/docs/api/personal-api-keys)
+- [Google Apps Script Properties Service](https://developers.google.com/apps-script/guides/properties)
+- [Google Apps Script installable triggers](https://developers.google.com/apps-script/guides/triggers/installable)

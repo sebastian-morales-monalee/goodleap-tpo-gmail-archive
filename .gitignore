@@ -1,0 +1,20 @@
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Google Apps Script / clasp local credentials and project identifiers
+.clasp.json
+.clasprc.json
+
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
