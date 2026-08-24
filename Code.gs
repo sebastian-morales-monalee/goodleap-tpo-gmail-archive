@@ -17,7 +17,9 @@ const CONFIG = {
   GROUP_EMAIL: 'goodleap-tpo@artemispower.com',
 
   // Test this exact query in Gmail search first.
-  GMAIL_QUERY: 'to:goodleap-tpo@artemispower.com has:attachment',
+  // Attachments are optional. A valid GoodLeap Case ID is the business-level
+  // requirement applied after Gmail returns the group messages.
+  GMAIL_QUERY: 'to:goodleap-tpo@artemispower.com',
 
   TIMEZONE: 'America/Bogota',
   ROOT_FOLDER_NAME: 'GoodLeap TPO Archive',
@@ -140,6 +142,8 @@ function previewGoodLeapMatches() {
 
   let messageCount = 0;
   let attachmentCount = 0;
+  let messagesWithoutAttachments = 0;
+  let messagesIgnoredWithoutCaseId = 0;
 
   console.log(`Query: ${CONFIG.GMAIL_QUERY}`);
   console.log(`Matching threads scanned: ${threads.length}`);
@@ -147,15 +151,27 @@ function previewGoodLeapMatches() {
   threads.forEach((thread) => {
     thread.getMessages().forEach((message) => {
       const attachments = getRealAttachments_(message);
-      if (!messageBelongsToGroup_(message) || attachments.length === 0) {
+      if (!messageBelongsToGroup_(message)) {
+        return;
+      }
+
+      const extracted = extractGoodLeapFields_(
+        message.getSubject() || '',
+        message.getPlainBody() || '',
+      );
+      if (!isValidGoodLeapCaseId_(extracted.caseId)) {
+        messagesIgnoredWithoutCaseId += 1;
         return;
       }
 
       messageCount += 1;
       attachmentCount += attachments.length;
+      if (attachments.length === 0) {
+        messagesWithoutAttachments += 1;
+      }
       console.log(
         `[MATCH] ${formatDate_(message.getDate(), 'yyyy-MM-dd HH:mm:ss')} | ` +
-        `${message.getFrom()} | ${message.getSubject()} | ` +
+        `${extracted.caseId} | ${message.getFrom()} | ${message.getSubject()} | ` +
         `${attachments.length} attachment(s)`,
       );
     });
@@ -163,6 +179,11 @@ function previewGoodLeapMatches() {
 
   console.log(`Matching messages: ${messageCount}`);
   console.log(`Matching attachments: ${attachmentCount}`);
+  console.log(`Matching messages without attachments: ${messagesWithoutAttachments}`);
+  console.log(
+    `Group messages ignored without a valid Case ID: ` +
+    `${messagesIgnoredWithoutCaseId}`,
+  );
 
   if (messageCount === 0) {
     console.log(
@@ -171,7 +192,13 @@ function previewGoodLeapMatches() {
     );
   }
 
-  return {threads: threads.length, messages: messageCount, attachments: attachmentCount};
+  return {
+    threads: threads.length,
+    messages: messageCount,
+    attachments: attachmentCount,
+    messagesWithoutAttachments,
+    messagesIgnoredWithoutCaseId,
+  };
 }
 
 /**
@@ -259,6 +286,8 @@ function processQuery_(query, maxThreads, mode) {
       threadsScanned: threads.length,
       messagesProcessed: 0,
       messagesSkipped: 0,
+      messagesIgnoredWithoutCaseId: 0,
+      messagesProcessedWithoutAttachments: 0,
       attachmentsSaved: 0,
       errors: 0,
     };
@@ -266,7 +295,16 @@ function processQuery_(query, maxThreads, mode) {
     threads.forEach((thread) => {
       thread.getMessages().forEach((message) => {
         const attachments = getRealAttachments_(message);
-        if (!messageBelongsToGroup_(message) || attachments.length === 0) {
+        if (!messageBelongsToGroup_(message)) {
+          return;
+        }
+
+        const extracted = extractGoodLeapFields_(
+          message.getSubject() || '',
+          message.getPlainBody() || '',
+        );
+        if (!isValidGoodLeapCaseId_(extracted.caseId)) {
+          stats.messagesIgnoredWithoutCaseId += 1;
           return;
         }
 
@@ -287,6 +325,9 @@ function processQuery_(query, maxThreads, mode) {
           );
           processedMessageIds.add(messageId);
           stats.messagesProcessed += 1;
+          if (attachments.length === 0) {
+            stats.messagesProcessedWithoutAttachments += 1;
+          }
           stats.attachmentsSaved += result.attachmentsSaved;
           thread.addLabel(processedLabel);
         } catch (error) {
@@ -329,6 +370,9 @@ function processMessage_(
   const subject = message.getSubject() || '';
   const body = message.getPlainBody() || '';
   const extracted = extractGoodLeapFields_(subject, body);
+  if (!isValidGoodLeapCaseId_(extracted.caseId)) {
+    throw new Error('The message does not contain a valid GoodLeap Case ID.');
+  }
   const caseFolder = getCaseFolder_(resources.rootFolder, receivedAt, extracted.caseId);
   const timestamp = formatDate_(receivedAt, 'yyyyMMdd_HHmmss');
   const shortMessageId = messageId.slice(-10);
@@ -612,6 +656,10 @@ function extractGoodLeapFields_(subject, body) {
       /Tolerance\s*:\s*([+-]?[\d,.]+)/i,
     ),
   };
+}
+
+function isValidGoodLeapCaseId_(caseId) {
+  return /^\d{2}-\d{2}-\d{6}$/.test(String(caseId || ''));
 }
 
 function extractNumber_(text, regex) {

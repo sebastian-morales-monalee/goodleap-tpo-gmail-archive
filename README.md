@@ -1,8 +1,8 @@
 # GoodLeap TPO Gmail Archive
 
 This project automates the collection and indexing of GoodLeap TPO email
-messages, saves their attachments in Google Drive, and enriches the archive
-with the corresponding Artemis Sales Project ID from PostHog.
+messages, saves their attachments in Google Drive when present, and enriches
+the archive with the corresponding Artemis Sales Project ID from PostHog.
 
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
@@ -35,8 +35,9 @@ Google Group delivery rules.
 - The Google account that runs setup must receive the GoodLeap group messages
   in its own Gmail mailbox. Group membership alone is not sufficient if the
   messages are not delivered to that mailbox.
-- Matching messages must include an attachment and satisfy the configured
-  Gmail query.
+- Matching messages must be delivered through the configured GoodLeap group
+  and contain a valid Case ID in the `00-00-000000` format. Attachments are
+  optional.
 - The operating account must be allowed to create files in My Drive,
   spreadsheets, Gmail labels, and installable Apps Script triggers.
 - The operator must have access to the target PostHog environment and
@@ -58,11 +59,12 @@ The primary Gmail archive workflow.
 
 It:
 
-- Searches Gmail for messages sent to `goodleap-tpo@artemispower.com` with
-  attachments.
+- Searches Gmail for messages sent to `goodleap-tpo@artemispower.com` and
+  retains only those containing a valid GoodLeap Case ID.
 - Extracts the Case ID and production fields from each message.
 - Creates a `year/month/Case ID` folder hierarchy in Google Drive.
-- Saves attachments and, when enabled, a plain-text copy of the email body.
+- Saves attachments when present and, when enabled, a plain-text copy of the
+  email body.
 - Maintains the `Emails`, `Attachments`, and `Errors` sheets.
 - Deduplicates Gmail messages by Gmail Message ID.
 - Deduplicates attachments by message, attachment index, and SHA-1 hash.
@@ -224,7 +226,7 @@ complete function order is:
 | --- | --- | --- | --- |
 | 1 | `setupGoodLeapArchive()` | `Code.gs` | Create or reuse the Drive folder, spreadsheet, sheets, and Gmail labels |
 | 2 | `previewGoodLeapMatches()` | `Code.gs` | Inspect matching Gmail messages without writing archive data |
-| 3 | `processGoodLeapHistory()` | `Code.gs` | Import existing matching messages and attachments |
+| 3 | `processGoodLeapHistory()` | `Code.gs` | Import existing matching messages and any available attachments |
 | 4 | `setupPostHogProjectSync()` | `PostHogSync.gs` | Validate PostHog settings and create the derived sheet |
 | 5 | `testPostHogConnection()` | `PostHogSync.gs` | Verify the private API connection without writing project data |
 | 6 | `previewPostHogProjectMatches()` | `PostHogSync.gs` | Preview Application ID to Project ID matches |
@@ -342,6 +344,13 @@ The derived sheet contains one row per unique Case ID. Do not add manual
 columns or notes to this tab because its data area is rewritten during each
 successful sync.
 
+An attachment is not required for a valid project row. When a matching email
+has no real attachment, `Emails.Attachment Count` is `0`, its attachment URL
+cell remains empty, no row is added to `Attachments`, and `PostHog Projects`
+still receives the Application ID, Project ID, and Project URL. Messages that
+do not contain a valid Case ID are ignored, preventing general group messages
+or tests from entering the archive.
+
 Its managed columns are:
 
 | Column | Value |
@@ -435,7 +444,8 @@ stop all PostHog calls while keeping Gmail automation, run
 
 - Every five minutes, the coordinator asks `Code.gs` to check for new GoodLeap
   Gmail messages.
-- New attachments and message metadata are archived in Drive and Sheets.
+- New message metadata and any available attachments are archived in Drive and
+  Sheets. Messages with a valid Case ID are retained even with zero attachments.
 - When new messages were archived, `PostHogSync.gs` immediately refreshes the
   derived project lookup and its Drive attachment links.
 - Every hour, `PostHogSync.gs` performs the same reconciliation as a fallback.
