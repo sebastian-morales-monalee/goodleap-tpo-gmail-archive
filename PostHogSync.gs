@@ -650,10 +650,12 @@ function syncPostHogProjects() {
 }
 
 /**
- * Runs from the integrated five-minute trigger. Gmail is always checked, but
- * PostHog is queried immediately only when at least one new message was
- * archived. The independent hourly trigger retries delayed warehouse records
- * and reconciles existing mappings.
+ * Runs from the integrated five-minute trigger. After each successful Gmail
+ * check, the coordinator processes a bounded batch of pending OpenAI rows.
+ * This safely picks up a message that was skipped because another execution
+ * held the lock. PostHog is refreshed only when at least one new message was
+ * archived. OpenAI failures cannot prevent the PostHog step. The separate
+ * hourly trigger retries delayed warehouse records and reconciles mappings.
  */
 function processRecentGoodLeapEmailsAndSyncPostHog() {
   const gmailStats = processRecentGoodLeapEmails();
@@ -664,10 +666,13 @@ function processRecentGoodLeapEmailsAndSyncPostHog() {
     );
     return {
       gmail: gmailStats || null,
+      openAI: null,
       postHog: null,
       postHogSkipped: true,
     };
   }
+
+  const openAIStats = analyzeRecentGoodLeapEmailsWithOpenAI();
 
   if (Number(gmailStats.messagesProcessed || 0) === 0) {
     console.log(
@@ -675,6 +680,7 @@ function processRecentGoodLeapEmailsAndSyncPostHog() {
     );
     return {
       gmail: gmailStats,
+      openAI: openAIStats,
       postHog: null,
       postHogSkipped: true,
     };
@@ -688,6 +694,7 @@ function processRecentGoodLeapEmailsAndSyncPostHog() {
 
   return {
     gmail: gmailStats,
+    openAI: openAIStats,
     postHog: postHogStats,
     postHogSkipped: false,
   };

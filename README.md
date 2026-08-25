@@ -2,7 +2,9 @@
 
 This project automates the collection and indexing of GoodLeap TPO email
 messages, saves their attachments in Google Drive when present, and enriches
-the archive with the corresponding Artemis Sales Project ID from PostHog.
+the archive with the corresponding Artemis Sales Project ID from PostHog. It
+also classifies each archived email through the OpenAI Responses API and writes
+a structured operational summary to a separate sheet.
 
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
@@ -19,6 +21,8 @@ User Gmail mailbox
 Integrated trigger (every 5 minutes)
         |
         +-------------------------> Code.gs -> Drive + archive sheets
+        |
+        +--- pending batch each check -> OpenAIAnalysis.gs -> AI Analysis
         |
         +--- only after new mail -> PostHogSync.gs -> PostHog Projects
                                              ^
@@ -42,6 +46,8 @@ Google Group delivery rules.
   spreadsheets, Gmail labels, and installable Apps Script triggers.
 - The operator must have access to the target PostHog environment and
   permission to create a Personal API Key for it.
+- The operator must have access to an OpenAI API project with billing and
+  permission to use the configured model.
 - Installable triggers run as the Google account that creates them. A new owner
   must run the final trigger installer while signed in as the account that will
   operate the archive.
@@ -105,6 +111,44 @@ Primary functions:
 3. `processGoodLeapManualBackfill()`
 
 Run this workflow only when a reviewed historical backfill is required.
+
+### `OpenAIAnalysis.gs`
+
+The independent email-classification workflow.
+
+It:
+
+- Reads the archived plain-text body from `Emails`, with the Drive TXT file and
+  original Gmail message as fallbacks.
+- Removes quoted reply history, Google Groups footer text, and common legal
+  boilerplate before analysis.
+- Sends the newest email content to the OpenAI Responses API with
+  `store: false`.
+- Uses strict Structured Outputs instead of parsing free-form prose.
+- Creates and maintains the `AI Analysis` sheet automatically.
+- Stores one row per Gmail Message ID, allowing multiple emails for one
+  Application ID to retain separate analyses.
+- Classifies one primary category plus every applicable secondary category.
+- Extracts review type, review status, rejection reasons, steps to clear,
+  production values, required evidence, technical notes, a concise summary,
+  and a human-review flag.
+- Records failed messages as `Error` without interrupting Gmail archiving or
+  PostHog synchronization.
+- Does not automatically retry failed rows, preventing repeated API calls. A
+  reviewed retry function is available.
+
+Primary functions:
+
+1. `setupOpenAIEmailAnalysis()`
+2. `testOpenAIConnection()`
+3. `previewOpenAIEmailAnalysis()`
+4. `analyzePendingGoodLeapEmailsWithOpenAI()`
+5. `analyzeGoodLeapEmailHistoryWithOpenAI()`
+6. `retryFailedOpenAIEmailAnalyses()`
+
+The current taxonomy is multi-label and includes `Production`, `Layout`,
+`Equipment`, `Shading / Site Conditions`, `Structure`, `Documentation`,
+`Offset`, `Communication / Follow-up`, and `Other`.
 
 ### `PostHogSync.gs`
 
@@ -176,6 +220,32 @@ Apps Script does not load `.env` files, so the required values must still be
 added through **Project Settings > Script Properties**. Never place a real
 Personal API Key in `.env.example` or commit a populated `.env` file.
 
+### Obtain the OpenAI values
+
+1. Sign in to the OpenAI API platform and select the API project that will own
+   this automation's usage.
+2. Create a project API key for this workflow and copy it once.
+3. Add the key as `OPENAI_API_KEY` in Apps Script Script Properties.
+4. Add `OPENAI_MODEL` with `gpt-5.4-mini`, or another model that supports both
+   the Responses API and Structured Outputs after validating the change.
+
+Never use a ChatGPT password or session token. API access, billing, and model
+permissions belong to the selected OpenAI API project.
+
+Required OpenAI properties:
+
+| Property | Example | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | `sk-proj-...` | Project API key used only in the Authorization header |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Model used for structured email classification |
+
+Optional OpenAI properties:
+
+| Property | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_ANALYSIS_BATCH_SIZE` | `10` | Maximum messages processed by each manual batch, limited to 20 |
+| `OPENAI_MAX_EMAIL_CHARACTERS` | `30000` | Maximum cleaned characters sent from one email, limited to 100000 |
+
 ### Obtain the three PostHog values
 
 1. Sign in to PostHog and open the environment that contains the GoodLeap
@@ -234,7 +304,8 @@ To add them in Apps Script:
 
 1. Open **Project Settings** in the left sidebar.
 2. Under **Script Properties**, select **Add script property**.
-3. Add the three required key/value pairs exactly as named in the table above.
+3. Add the required OpenAI and PostHog key/value pairs exactly as named in the
+   tables above.
 4. Select **Save script properties**.
 5. Never add quotes around the values and never paste the key into a `.gs`
    file, Sheet cell, execution log, screenshot, or chat.
@@ -253,7 +324,11 @@ complete function order is:
 | 5 | `testPostHogConnection()` | `PostHogSync.gs` | Verify the private API connection without writing project data |
 | 6 | `previewPostHogProjectMatches()` | `PostHogSync.gs` | Preview Application ID to Project ID matches |
 | 7 | `syncPostHogProjects()` | `PostHogSync.gs` | Write the first verified project synchronization |
-| 8 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 8 | `setupOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Validate OpenAI settings and create the AI Analysis sheet |
+| 9 | `testOpenAIConnection()` | `OpenAIAnalysis.gs` | Verify API authentication, model access, and Structured Outputs |
+| 10 | `previewOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Analyze one email without writing the AI Analysis sheet |
+| 11 | `analyzePendingGoodLeapEmailsWithOpenAI()` | `OpenAIAnalysis.gs` | Write the first bounded historical analysis batch; rerun until pending is zero |
+| 12 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -271,11 +346,12 @@ steps for every new deployment.
 Create a standalone Google Apps Script project and set its time zone to
 `America/Bogota`.
 
-Add three script files to the same project:
+Add four script files to the same project:
 
 - `Code.gs`
 - `ManualBackfill.gs`
 - `PostHogSync.gs`
+- `OpenAIAnalysis.gs`
 
 `README.md` is repository documentation and does not need to be pasted into
 the Apps Script editor.
@@ -292,9 +368,9 @@ Before the first execution, review these values near the top of `Code.gs`:
 `BACKFILL_AFTER` uses `YYYY/MM/DD`. It controls only the historical import;
 the five-minute trigger uses the separate recent-message window.
 
-Add the three required PostHog Script Properties before running the PostHog
-functions. Do not manually add any `GOODLEAP_*` properties; setup creates those
-resource identifiers automatically.
+Add the required PostHog and OpenAI Script Properties before running their
+respective functions. Do not manually add any `GOODLEAP_*` properties; setup
+creates those resource identifiers automatically.
 
 ### 2. Initialize the Gmail archive
 
@@ -399,7 +475,22 @@ Google Groups links are matched by `Emails.Case ID` to the same Application
 ID. Duplicate URLs are suppressed. Exact `/c/{token}` conversation URLs take
 precedence; when no exact URL exists, the Case-ID search fallback is displayed.
 
-### 6. Enable the hybrid schedule
+### 6. Validate OpenAI and enable the hybrid schedule
+
+Before installing the schedule, initialize and validate OpenAI:
+
+1. Open `OpenAIAnalysis.gs` in the Apps Script editor.
+2. Run `setupOpenAIEmailAnalysis()` and confirm that `AI Analysis` is created.
+3. Run `testOpenAIConnection()` and confirm that the log reports a response ID
+   without displaying the API key.
+4. Run `previewOpenAIEmailAnalysis()` and review the classification. The
+   preview consumes API tokens but does not write a row.
+5. Run `analyzePendingGoodLeapEmailsWithOpenAI()` to write one historical
+   batch.
+6. Review the `AI Analysis` output. Rerun the same function until the execution
+   log reports `pendingMessages: 0`.
+7. Investigate every row marked `Error`. After correcting the cause, run
+   `retryFailedOpenAIEmailAnalyses()` to retry only failed rows.
 
 Only after the first manual sync is correct, run:
 
@@ -413,11 +504,12 @@ then creates exactly two:
 - `processRecentGoodLeapEmailsAndSyncPostHog` every five minutes;
 - `syncPostHogProjects` every hour.
 
-The five-minute coordinator always checks Gmail. It calls PostHog immediately
-only when at least one new message was archived. The hourly trigger retries
-Application IDs that may not yet have reached the PostHog warehouse and
-reconciles existing rows. The installer is idempotent and can be rerun without
-accumulating duplicate triggers.
+The five-minute coordinator always checks Gmail and then processes a bounded
+batch of pending OpenAI rows. When no row is pending, no OpenAI request is
+created. PostHog is called immediately only when at least one new message was
+archived. The hourly trigger retries Application IDs that may not yet have
+reached the PostHog warehouse and reconciles existing rows. The installer is
+idempotent and can be rerun without accumulating duplicate triggers.
 
 The Google account that runs this installer owns both triggers. Run it while
 signed in as the account whose Gmail mailbox will be monitored.
@@ -441,6 +533,30 @@ the PostHog hourly trigger:
 Do not manually edit or delete the old managed triggers before step 3. The
 installer removes every legacy or duplicate instance itself, while leaving
 unrelated triggers untouched.
+
+### Adding OpenAI analysis to an existing installation
+
+An installation that already runs the five-minute Gmail/PostHog coordinator
+does not need another trigger.
+
+1. Create `OpenAIAnalysis.gs` in the same Apps Script project and paste the
+   repository version. Save it before modifying the coordinator.
+2. Add `OPENAI_API_KEY` and `OPENAI_MODEL` in Script Properties.
+3. Run `setupOpenAIEmailAnalysis()`, `testOpenAIConnection()`, and
+   `previewOpenAIEmailAnalysis()` from `OpenAIAnalysis.gs`.
+4. Run `analyzePendingGoodLeapEmailsWithOpenAI()` repeatedly until
+   `pendingMessages` is `0`, reviewing the bounded output after each batch.
+5. Replace `PostHogSync.gs` with the repository version and save the project.
+6. Do not reinstall the triggers. The existing
+   `processRecentGoodLeapEmailsAndSyncPostHog` trigger resolves the new OpenAI
+   function from the shared Apps Script runtime on its next five-minute run.
+7. Confirm that the Triggers page still shows exactly the existing integrated
+   five-minute trigger and hourly PostHog trigger.
+
+The new `AI Analysis` tab is independent from `PostHog Projects`. It is keyed
+by Gmail Message ID rather than Application ID, so several emails for the same
+project preserve their own categories, status, reasons, and summary. Do not
+insert, remove, rename, or reorder its managed columns.
 
 ### Adding Attachment Links to an existing installation
 
@@ -567,6 +683,12 @@ stop all PostHog calls while keeping Gmail automation, run
   Gmail messages.
 - New message metadata and any available attachments are archived in Drive and
   Sheets. Messages with a valid Case ID are retained even with zero attachments.
+- After each successful Gmail check, `OpenAIAnalysis.gs` classifies a bounded
+  batch of not-yet-analyzed messages and adds one row per Gmail Message ID to
+  `AI Analysis`. No API call is made when the pending batch is empty.
+- An OpenAI error is written to that message's analysis row and does not block
+  the following PostHog synchronization. Failed rows require an explicit
+  reviewed retry.
 - Each new `Emails` row receives its exact Google Groups conversation URL when
   that link is available in the source message.
 - When new messages were archived, `PostHogSync.gs` immediately refreshes the
@@ -586,6 +708,10 @@ The deployment is ready only when all of the following are true:
 - `testPostHogConnection()` passes.
 - `previewPostHogProjectMatches()` returns at least one verified match.
 - `syncPostHogProjects()` populates Project IDs and valid Artemis URLs.
+- `testOpenAIConnection()` passes and does not expose the API key.
+- `previewOpenAIEmailAnalysis()` returns a reasonable classification.
+- `AI Analysis` contains one successful row for every intended historical
+  Gmail Message ID, with no unexplained `Error` rows.
 - The **Triggers** page shows one
   `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
   `syncPostHogProjects` hourly trigger owned by the operating account.
@@ -601,24 +727,53 @@ new source record can remain temporarily unavailable in PostHog.
 
 1. Confirm that the target account receives the group messages in Gmail and
    can access the intended PostHog environment.
-2. Copy the three `.gs` files into a new standalone Apps Script project.
+2. Copy the four `.gs` files into a new standalone Apps Script project.
 3. Review the Gmail query, historical start date, and time zone.
 4. Obtain a new purpose-specific PostHog Personal API Key; do not reuse another
    person's key.
-5. Add the three required PostHog Script Properties.
+5. Create a purpose-specific OpenAI project API key and add the required
+   OpenAI and PostHog Script Properties.
 6. Run the Gmail setup, preview, and historical import sequence.
 7. Run the PostHog setup, connection test, preview, and first synchronization.
-8. Use the schema inspection functions only if the default mapping fails in
+8. Run the OpenAI setup, connection test, preview, and bounded historical
+   analysis. Review the derived output before enabling automation.
+9. Use the schema inspection functions only if the default mapping fails in
    the target environment.
-9. After both workflows have been validated, run
+10. After all workflows have been validated, run
    `installHybridGoodLeapPostHogTriggers()`.
-10. Confirm that exactly one integrated five-minute trigger and one hourly
+11. Confirm that exactly one integrated five-minute trigger and one hourly
    PostHog trigger exist.
 
 All Drive folders, Sheets tabs, Gmail labels, and time-based triggers are
 created by setup functions. They do not need to be created manually.
 
 ## Troubleshooting
+
+### HTTP 401, 403, or model-access error from OpenAI
+
+- Verify that `OPENAI_API_KEY` contains an active API project key and has no
+  surrounding quotes or spaces.
+- Verify that the selected API project has billing enabled and permission to
+  use the exact `OPENAI_MODEL` value.
+- Run `testOpenAIConnection()` again after replacing or rotating the key.
+- Do not paste the key into execution logs while diagnosing the request.
+
+### HTTP 429 or OpenAI quota error
+
+- Review the OpenAI API project's usage limits and billing status.
+- Reduce `OPENAI_ANALYSIS_BATCH_SIZE` before a historical backfill.
+- Wait for the applicable rate-limit window, then run
+  `retryFailedOpenAIEmailAnalyses()` once.
+- Successful Gmail, Drive, Sheets, and PostHog work remains valid; do not rerun
+  the email import to retry only the AI layer.
+
+### An AI Analysis row is marked `Error`
+
+- Read the row's `Error` cell and correct authentication, quota, model, or
+  source-body issues.
+- Run `retryFailedOpenAIEmailAnalyses()` to retry only rows marked `Error`.
+- Do not delete successful rows and do not run the historical Gmail import as
+  an AI retry mechanism.
 
 ### HTTP 401 or 403 from PostHog
 
@@ -680,18 +835,27 @@ currently holds the shared Apps Script lock. The next scheduled run will retry.
 
 ## Security and data handling
 
+- Never paste the OpenAI API key into source code, Sheets, chat, screenshots,
+  or execution logs. Store it only in Apps Script Script Properties.
 - Never paste the PostHog Personal API Key into source code, Sheets, chat, or
   screenshots.
 - Give the key only `query:read` and restrict it to the required PostHog
   environment when possible.
 - Keep the Apps Script editor list limited because editors can access Script
   Properties.
-- Rotate the key if its owner leaves the project or if exposure is suspected.
+- Rotate either key if its owner leaves the project or exposure is suspected.
+- The OpenAI request sends the cleaned newest email body plus the Application
+  ID, sender, subject, extracted production fields, and review type. It does
+  not send Drive attachments or PostHog data.
+- OpenAI requests set `store: false`. Applicable API data controls and retention
+  still depend on the OpenAI organization's configuration and current terms.
 - The scripts never delete, archive, or mark Gmail messages as read.
 - The scripts do not delete Drive files or archive sheets.
 
 ## Reference documentation
 
+- [OpenAI Responses API](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
+- [OpenAI GPT-5.4 mini model](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
 - [PostHog API overview](https://posthog.com/docs/api)
 - [PostHog Personal API keys](https://posthog.com/docs/api/personal-api-keys)
 - [Google Apps Script Properties Service](https://developers.google.com/apps-script/guides/properties)
