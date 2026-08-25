@@ -118,6 +118,9 @@ It:
 - Queries `goodleap_postgres_financiers` first and sends only unmatched
   Application IDs to the `artemis_sales_postgres_financiers` fallback.
 - Looks up the Artemis Sales Project ID.
+- Writes `GoodLeap` as the organization for primary matches. For Sales
+  fallback matches, joins the project to its organization and writes the
+  organization name returned by PostHog.
 - Constructs the Artemis project URL.
 - Creates and maintains the `PostHog Projects` sheet automatically.
 - Adds every saved Drive attachment to `PostHog Projects` as a clickable
@@ -138,6 +141,8 @@ The default warehouse mapping is:
 | Artemis Sales Project ID | `goodleap_postgres_financiers.project_id` |
 | Fallback Application ID | `artemis_sales_postgres_financiers.application_id` |
 | Fallback Project ID | `artemis_sales_postgres_financiers.project_id` |
+| Sales project organization ID | `artemis_sales_postgres_projects.organization_id` |
+| Sales organization name | `artemis_sales_postgres_organizations.name` |
 | GoodLeap Project URL | `https://goodleap.artemis.solar/projects/{id}/proposal` |
 | Artemis Sales Project URL | `https://sales.artemis.solar/projects/{id}/proposal` |
 
@@ -207,9 +212,13 @@ Optional properties:
 | --- | --- | --- |
 | `POSTHOG_GOODLEAP_LOOKUP_TABLE` | `goodleap_postgres_financiers` | Warehouse lookup table |
 | `POSTHOG_ARTEMIS_SALES_LOOKUP_TABLE` | `artemis_sales_postgres_financiers` | Fallback warehouse lookup table |
+| `POSTHOG_ARTEMIS_SALES_PROJECTS_TABLE` | `artemis_sales_postgres_projects` | Sales projects table |
+| `POSTHOG_ARTEMIS_SALES_ORGANIZATIONS_TABLE` | `artemis_sales_postgres_organizations` | Sales organizations table |
 | `POSTHOG_APPLICATION_ID_FIELD` | `application_id` | Financier Application ID field |
 | `POSTHOG_GOODLEAP_PROJECT_ID_FIELD` | `project_id` | Artemis Project ID field |
 | `POSTHOG_SOURCE_UPDATED_AT_FIELD` | `updated_at` | Source freshness field |
+| `POSTHOG_ARTEMIS_SALES_PROJECT_ORGANIZATION_ID_FIELD` | `organization_id` | Sales project-to-organization field |
+| `POSTHOG_ARTEMIS_SALES_ORGANIZATION_NAME_FIELD` | `name` | Sales organization display field |
 | `POSTHOG_PROJECT_URL_PREFIX` | `https://goodleap.artemis.solar/projects/` | URL prefix |
 | `POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX` | `https://sales.artemis.solar/projects/` | Sales fallback URL prefix |
 | `POSTHOG_PROJECT_URL_SUFFIX` | `/proposal` | URL suffix |
@@ -370,6 +379,7 @@ Its managed columns are:
 | --- | --- |
 | `Application ID` | Case ID read from `Emails` |
 | `Project ID` | Artemis project identifier returned by PostHog |
+| `Organization` | `GoodLeap` for primary matches or the joined Sales organization name |
 | `Project URL` | Direct Artemis proposal URL |
 | `Attachment Links` | Clickable Drive filenames read from `Attachments` |
 | `Google Group URL` | Exact conversation or Case-ID search link read from `Emails` |
@@ -439,15 +449,15 @@ eight-column layout:
 
 1. Replace only `PostHogSync.gs` with the updated repository version and save.
 2. Run `setupPostHogProjectSync()` once. It detects the exact legacy header
-   sequence and inserts `Attachment Links` as column D and `Google Group URL`
-   as column E automatically.
+   sequence and inserts `Organization` as column C, `Attachment Links` as
+   column E, and `Google Group URL` as column F automatically.
 3. Run `syncPostHogProjects()` once to populate both historical link columns.
 4. Verify at least one row with a single file and one with multiple files.
 5. Confirm that the existing five-minute and hourly triggers remain present.
 
 Do not insert the column manually and do not reinstall the triggers. The setup
 function is idempotent: after migration, later executions validate the current
-ten-column structure without adding another column.
+eleven-column structure without adding another column.
 
 ### Adding Google Group URLs to an existing installation
 
@@ -490,8 +500,8 @@ For an installation that already has the nine-column `PostHog Projects` layout
 with `Attachment Links`:
 
 1. Replace only `PostHogSync.gs` with the updated version and save.
-2. Run `setupPostHogProjectSync()` once. It inserts `Google Group URL` as
-   column E and shifts the timestamp/status columns safely.
+2. Run `setupPostHogProjectSync()` once. It inserts `Organization` as column C
+   and `Google Group URL` as column F, shifting the remaining columns safely.
 3. Run `syncPostHogProjects()` once to populate historical group links from
    `Emails`.
 4. Verify one exact or fallback link and confirm the remaining data columns are
@@ -503,12 +513,12 @@ automatically.
 
 ### Enabling the Artemis Sales fallback in an existing installation
 
-The fallback is implemented entirely in `PostHogSync.gs`; it does not add a
-Sheet column or require a new trigger.
+The fallback is implemented entirely in `PostHogSync.gs`; it does not require
+a new trigger.
 
 1. Replace `PostHogSync.gs` with the current repository version and save it.
 2. Run `setupPostHogProjectSync()` once. Confirm that the execution log lists
-   `artemis_sales_postgres_financiers` as the Artemis Sales fallback table.
+   the financiers, projects, and organizations tables for Artemis Sales.
 3. Run `previewPostHogProjectMatches()`. A fallback result ends with
    `Artemis Sales` in the `[MATCH]` log line.
 4. Run `syncPostHogProjects()` once to refresh historical `Not Found` rows.
@@ -522,6 +532,24 @@ that table name. The Sales URL prefix also defaults automatically; use
 `POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX` only when a deployment needs a
 different Sales origin. Do not reinstall the triggers: the existing
 five-minute and hourly handlers automatically execute the updated lookup logic.
+
+### Adding Organization to an existing PostHog Projects sheet
+
+For an installation that already has the current ten-column layout:
+
+1. Replace only `PostHogSync.gs` with the current repository version and save.
+2. Run `setupPostHogProjectSync()` once. It detects the exact ten-column header
+   sequence and inserts `Organization` between `Project ID` and `Project URL`.
+3. Run `previewPostHogProjectMatches()`. GoodLeap results should display
+   `GoodLeap`; Sales fallback results should display the joined organization
+   name in each `[MATCH]` log line.
+4. Run `syncPostHogProjects()` once to populate the new column for all
+   historical rows.
+5. Verify that attachment and Google Groups hyperlinks still occupy columns E
+   and F and remain clickable.
+
+The setup function is idempotent and does not insert duplicate columns. Do not
+add the column manually and do not reinstall either trigger.
 
 To remove only the hourly fallback, run:
 
@@ -617,9 +645,16 @@ created by setup functions. They do not need to be created manually.
 No manual action is required. The lookup checks GoodLeap first. Only IDs with
 zero GoodLeap matches are queried in `artemis_sales_postgres_financiers`. A
 Sales match populates the same Project ID and Project URL columns and reports
-`Matched`. GoodLeap matches use `goodleap.artemis.solar`; fallback matches use
-`sales.artemis.solar`. If both sources return zero rows, the status remains
-`Not Found`.
+`Matched`. It also joins `artemis_sales_postgres_projects.organization_id` to
+`artemis_sales_postgres_organizations.id` and writes the organization's
+`name`. GoodLeap matches use organization `GoodLeap` and the
+`goodleap.artemis.solar` origin; fallback matches use the joined organization
+name and the `sales.artemis.solar` origin. If both sources return zero rows,
+the status remains `Not Found`.
+
+If the Sales project exists but its organization relation or name is missing,
+the project remains `Matched`, the `Organization` cell stays empty, and the
+execution log includes `[ORGANIZATION NOT FOUND]` for that Application ID.
 
 PostHog currently refreshes these warehouse tables on its own source schedule.
 The five-minute Apps Script trigger cannot expose a source row before PostHog
@@ -628,14 +663,15 @@ has synchronized it; the hourly reconciliation retries delayed records.
 ### `Multiple Matches`
 
 More than one unique Artemis Project ID has the same Application ID. The sheet
-lists every matching ID and URL on separate lines. Review the source data; the
-script intentionally does not choose one silently.
+lists every matching ID, organization, and URL on corresponding separate
+lines. Review the source data; the script intentionally does not choose one
+silently.
 
 ### Temporary API error
 
 The row is marked `Error`. If it had a previous successful match, the old
-Project ID and URL are preserved. Run `syncPostHogProjects()` again after the
-API or permission issue is resolved.
+Project ID, organization, and URL are preserved. Run `syncPostHogProjects()`
+again after the API or permission issue is resolved.
 
 ### Another execution is running
 

@@ -34,9 +34,14 @@ const POSTHOG_SYNC_CONFIG = {
   // Application ID and its related Artemis project ID directly.
   DEFAULT_LOOKUP_TABLE: 'goodleap_postgres_financiers',
   DEFAULT_FALLBACK_LOOKUP_TABLE: 'artemis_sales_postgres_financiers',
+  DEFAULT_FALLBACK_PROJECTS_TABLE: 'artemis_sales_postgres_projects',
+  DEFAULT_FALLBACK_ORGANIZATIONS_TABLE:
+    'artemis_sales_postgres_organizations',
   DEFAULT_APPLICATION_ID_FIELD: 'application_id',
   DEFAULT_PROJECT_ID_FIELD: 'project_id',
   DEFAULT_SOURCE_UPDATED_AT_FIELD: 'updated_at',
+  DEFAULT_PROJECT_ORGANIZATION_ID_FIELD: 'organization_id',
+  DEFAULT_ORGANIZATION_NAME_FIELD: 'name',
 
   // Existing GoodLeap records in this repository use this URL shape.
   DEFAULT_PROJECT_URL_PREFIX: 'https://goodleap.artemis.solar/projects/',
@@ -58,9 +63,15 @@ const POSTHOG_PROPERTY_KEYS = {
   // Optional overrides. The defaults above are used when these are absent.
   LOOKUP_TABLE: 'POSTHOG_GOODLEAP_LOOKUP_TABLE',
   FALLBACK_LOOKUP_TABLE: 'POSTHOG_ARTEMIS_SALES_LOOKUP_TABLE',
+  FALLBACK_PROJECTS_TABLE: 'POSTHOG_ARTEMIS_SALES_PROJECTS_TABLE',
+  FALLBACK_ORGANIZATIONS_TABLE:
+    'POSTHOG_ARTEMIS_SALES_ORGANIZATIONS_TABLE',
   APPLICATION_ID_FIELD: 'POSTHOG_APPLICATION_ID_FIELD',
   PROJECT_ID_FIELD: 'POSTHOG_GOODLEAP_PROJECT_ID_FIELD',
   SOURCE_UPDATED_AT_FIELD: 'POSTHOG_SOURCE_UPDATED_AT_FIELD',
+  PROJECT_ORGANIZATION_ID_FIELD:
+    'POSTHOG_ARTEMIS_SALES_PROJECT_ORGANIZATION_ID_FIELD',
+  ORGANIZATION_NAME_FIELD: 'POSTHOG_ARTEMIS_SALES_ORGANIZATION_NAME_FIELD',
   PROJECT_URL_PREFIX: 'POSTHOG_PROJECT_URL_PREFIX',
   FALLBACK_PROJECT_URL_PREFIX: 'POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX',
   PROJECT_URL_SUFFIX: 'POSTHOG_PROJECT_URL_SUFFIX',
@@ -69,6 +80,7 @@ const POSTHOG_PROPERTY_KEYS = {
 const POSTHOG_PROJECT_HEADERS = [
   'Application ID',
   'Project ID',
+  'Organization',
   'Project URL',
   'Attachment Links',
   'Google Group URL',
@@ -102,6 +114,19 @@ const LEGACY_POSTHOG_PROJECT_HEADERS_V2 = [
   'Error',
 ];
 
+const LEGACY_POSTHOG_PROJECT_HEADERS_V3 = [
+  'Application ID',
+  'Project ID',
+  'Project URL',
+  'Attachment Links',
+  'Google Group URL',
+  'Source Updated At',
+  'Last Synced At',
+  'Match Status',
+  'Match Count',
+  'Error',
+];
+
 /**
  * Validates configuration and creates the derived PostHog Projects sheet.
  * It is idempotent and can be run again safely.
@@ -118,6 +143,11 @@ function setupPostHogProjectSync() {
   console.log(`PostHog environment ID: ${settings.projectId}`);
   console.log(`GoodLeap lookup table: ${settings.lookupTable}`);
   console.log(`Artemis Sales fallback table: ${settings.fallbackLookupTable}`);
+  console.log(`Artemis Sales projects table: ${settings.fallbackProjectsTable}`);
+  console.log(
+    `Artemis Sales organizations table: ` +
+    `${settings.fallbackOrganizationsTable}`,
+  );
   console.log(`GoodLeap project URL prefix: ${settings.projectUrlPrefix}`);
   console.log(
     `Artemis Sales project URL prefix: ${settings.fallbackProjectUrlPrefix}`,
@@ -133,6 +163,8 @@ function setupPostHogProjectSync() {
     postHogProjectId: settings.projectId,
     lookupTable: settings.lookupTable,
     fallbackLookupTable: settings.fallbackLookupTable,
+    fallbackProjectsTable: settings.fallbackProjectsTable,
+    fallbackOrganizationsTable: settings.fallbackOrganizationsTable,
     applicationIdField: settings.applicationIdField,
     projectIdField: settings.projectIdField,
   };
@@ -359,7 +391,8 @@ function previewPostHogProjectMatches() {
 
     applicationMatches.forEach((match) => {
       console.log(
-        `[MATCH] ${applicationId} | ${match.projectId} | ${match.projectUrl} | ` +
+        `[MATCH] ${applicationId} | ${match.projectId} | ` +
+        `${match.organization || '[NO ORGANIZATION]'} | ${match.projectUrl} | ` +
         `${match.lookupSource}`,
       );
     });
@@ -494,6 +527,7 @@ function syncPostHogProjects() {
       matched: 0,
       matchedFromGoodLeap: 0,
       matchedFromArtemisSales: 0,
+      matchedWithoutOrganization: 0,
       multipleMatches: 0,
       notFound: 0,
       errors: 0,
@@ -516,6 +550,7 @@ function syncPostHogProjects() {
         return buildPostHogOutputRow_(
           applicationId,
           previous ? previous.projectId : '',
+          previous ? previous.organization : '',
           previous ? previous.projectUrl : '',
           attachmentText,
           googleGroupText,
@@ -535,6 +570,7 @@ function syncPostHogProjects() {
           applicationId,
           '',
           '',
+          '',
           attachmentText,
           googleGroupText,
           '',
@@ -552,9 +588,14 @@ function syncPostHogProjects() {
         } else {
           stats.matchedFromGoodLeap += 1;
         }
+        if (!matches[0].organization) {
+          stats.matchedWithoutOrganization += 1;
+          console.warn(`[ORGANIZATION NOT FOUND] ${applicationId}`);
+        }
         return buildPostHogOutputRow_(
           applicationId,
           matches[0].projectId,
+          matches[0].organization,
           matches[0].projectUrl,
           attachmentText,
           googleGroupText,
@@ -567,9 +608,14 @@ function syncPostHogProjects() {
       }
 
       stats.multipleMatches += 1;
+      if (matches.some((match) => !match.organization)) {
+        stats.matchedWithoutOrganization += 1;
+        console.warn(`[ORGANIZATION NOT FOUND] ${applicationId}`);
+      }
       return buildPostHogOutputRow_(
         applicationId,
         matches.map((match) => match.projectId).join('\n'),
+        matches.map((match) => match.organization).join('\n'),
         matches.map((match) => match.projectUrl).join('\n'),
         attachmentText,
         googleGroupText,
@@ -757,6 +803,15 @@ function getPostHogSettings_() {
     properties.getProperty(POSTHOG_PROPERTY_KEYS.FALLBACK_LOOKUP_TABLE) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_FALLBACK_LOOKUP_TABLE,
   ).trim();
+  const fallbackProjectsTable = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.FALLBACK_PROJECTS_TABLE) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_FALLBACK_PROJECTS_TABLE,
+  ).trim();
+  const fallbackOrganizationsTable = String(
+    properties.getProperty(
+      POSTHOG_PROPERTY_KEYS.FALLBACK_ORGANIZATIONS_TABLE,
+    ) || POSTHOG_SYNC_CONFIG.DEFAULT_FALLBACK_ORGANIZATIONS_TABLE,
+  ).trim();
   const applicationIdField = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.APPLICATION_ID_FIELD) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_APPLICATION_ID_FIELD,
@@ -768,6 +823,15 @@ function getPostHogSettings_() {
   const sourceUpdatedAtField = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.SOURCE_UPDATED_AT_FIELD) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_SOURCE_UPDATED_AT_FIELD,
+  ).trim();
+  const projectOrganizationIdField = String(
+    properties.getProperty(
+      POSTHOG_PROPERTY_KEYS.PROJECT_ORGANIZATION_ID_FIELD,
+    ) || POSTHOG_SYNC_CONFIG.DEFAULT_PROJECT_ORGANIZATION_ID_FIELD,
+  ).trim();
+  const organizationNameField = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.ORGANIZATION_NAME_FIELD) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_ORGANIZATION_NAME_FIELD,
   ).trim();
   const projectUrlPrefix = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.PROJECT_URL_PREFIX) ||
@@ -807,7 +871,12 @@ function getPostHogSettings_() {
     );
   }
 
-  [lookupTable, fallbackLookupTable].forEach((table) => {
+  [
+    lookupTable,
+    fallbackLookupTable,
+    fallbackProjectsTable,
+    fallbackOrganizationsTable,
+  ].forEach((table) => {
     if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(table)) {
       throw new Error(
         `The configured PostHog lookup table is not a safe identifier: ${table}.`,
@@ -815,7 +884,13 @@ function getPostHogSettings_() {
     }
   });
 
-  [applicationIdField, projectIdField, sourceUpdatedAtField].forEach((field) => {
+  [
+    applicationIdField,
+    projectIdField,
+    sourceUpdatedAtField,
+    projectOrganizationIdField,
+    organizationNameField,
+  ].forEach((field) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field)) {
       throw new Error(`The configured PostHog field is not safe: ${field}.`);
     }
@@ -839,9 +914,13 @@ function getPostHogSettings_() {
     personalApiKey,
     lookupTable,
     fallbackLookupTable,
+    fallbackProjectsTable,
+    fallbackOrganizationsTable,
     applicationIdField,
     projectIdField,
     sourceUpdatedAtField,
+    projectOrganizationIdField,
+    organizationNameField,
     projectUrlPrefix,
     fallbackProjectUrlPrefix,
     projectUrlSuffix,
@@ -860,23 +939,24 @@ function getOrCreatePostHogProjectsSheet_(spreadsheet) {
   sheet.setFrozenRows(1);
   sheet.setColumnWidth(1, 150);
   sheet.setColumnWidth(2, 280);
-  sheet.setColumnWidth(3, 420);
+  sheet.setColumnWidth(3, 220);
   sheet.setColumnWidth(4, 420);
   sheet.setColumnWidth(5, 420);
-  sheet.setColumnWidth(6, 170);
+  sheet.setColumnWidth(6, 420);
   sheet.setColumnWidth(7, 170);
-  sheet.setColumnWidth(8, 150);
-  sheet.setColumnWidth(9, 100);
-  sheet.setColumnWidth(10, 420);
-  sheet.getRange('F:G').setNumberFormat('yyyy-mm-dd hh:mm:ss');
-  sheet.getRange('B:E').setWrap(true);
-  sheet.getRange('J:J').setWrap(true);
+  sheet.setColumnWidth(8, 170);
+  sheet.setColumnWidth(9, 150);
+  sheet.setColumnWidth(10, 100);
+  sheet.setColumnWidth(11, 420);
+  sheet.getRange('G:H').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sheet.getRange('B:F').setWrap(true);
+  sheet.getRange('K:K').setWrap(true);
 
   return sheet;
 }
 
 /**
- * Upgrades either supported legacy layout to the current derived schema. The
+ * Upgrades any supported legacy layout to the current derived schema. The
  * exact legacy header sequence must match before any structural change is
  * made, so rerunning setup cannot insert duplicate columns.
  */
@@ -888,7 +968,7 @@ function migratePostHogProjectsSheetSchema_(spreadsheet) {
   }
 
   const headerCount = Math.max(
-    LEGACY_POSTHOG_PROJECT_HEADERS_V2.length,
+    LEGACY_POSTHOG_PROJECT_HEADERS_V3.length,
     Math.min(sheet.getLastColumn(), POSTHOG_PROJECT_HEADERS.length),
   );
   const existingHeaders = sheet
@@ -902,15 +982,31 @@ function migratePostHogProjectsSheetSchema_(spreadsheet) {
     return;
   }
 
+  const isLegacyV3 = LEGACY_POSTHOG_PROJECT_HEADERS_V3.every(
+    (header, index) => existingHeaders[index] === header,
+  );
+
+  if (isLegacyV3) {
+    sheet.insertColumnBefore(3);
+    formatPostHogHeaderCell_(sheet.getRange(1, 3), 'Organization');
+    console.log(
+      'PostHog Projects schema upgraded: Organization was inserted as column C.',
+    );
+    return;
+  }
+
   const isLegacyV2 = LEGACY_POSTHOG_PROJECT_HEADERS_V2.every(
     (header, index) => existingHeaders[index] === header,
   );
 
   if (isLegacyV2) {
-    sheet.insertColumnBefore(5);
-    formatPostHogHeaderCell_(sheet.getRange(1, 5), 'Google Group URL');
+    sheet.insertColumnBefore(3);
+    formatPostHogHeaderCell_(sheet.getRange(1, 3), 'Organization');
+    sheet.insertColumnBefore(6);
+    formatPostHogHeaderCell_(sheet.getRange(1, 6), 'Google Group URL');
     console.log(
-      'PostHog Projects schema upgraded: Google Group URL was inserted as column E.',
+      'PostHog Projects schema upgraded: Organization and Google Group URL ' +
+      'were inserted as columns C and F.',
     );
     return;
   }
@@ -923,13 +1019,15 @@ function migratePostHogProjectsSheetSchema_(spreadsheet) {
     return;
   }
 
-  sheet.insertColumnBefore(4);
-  formatPostHogHeaderCell_(sheet.getRange(1, 4), 'Attachment Links');
+  sheet.insertColumnBefore(3);
+  formatPostHogHeaderCell_(sheet.getRange(1, 3), 'Organization');
   sheet.insertColumnBefore(5);
-  formatPostHogHeaderCell_(sheet.getRange(1, 5), 'Google Group URL');
+  formatPostHogHeaderCell_(sheet.getRange(1, 5), 'Attachment Links');
+  sheet.insertColumnBefore(6);
+  formatPostHogHeaderCell_(sheet.getRange(1, 6), 'Google Group URL');
   console.log(
-    'PostHog Projects schema upgraded: Attachment Links and Google Group URL ' +
-    'were inserted as columns D and E.',
+    'PostHog Projects schema upgraded: Organization, Attachment Links, and ' +
+    'Google Group URL were inserted as columns C, E, and F.',
   );
 }
 
@@ -1202,6 +1300,19 @@ function fetchPostHogProjectMatchesFromTable_(
   projectUrlPrefix,
   settings,
 ) {
+  const isArtemisSales = lookupSource === 'Artemis Sales';
+  const organizationExpression = isArtemisSales
+    ? `toString(o.${settings.organizationNameField})`
+    : postHogStringLiteral_('GoodLeap');
+  const joinLines = isArtemisSales
+    ? [
+      `LEFT JOIN ${settings.fallbackProjectsTable} AS p ` +
+        `ON toString(p.id) = toString(f.${settings.projectIdField})`,
+      `LEFT JOIN ${settings.fallbackOrganizationsTable} AS o ` +
+        `ON toString(o.id) = ` +
+        `toString(p.${settings.projectOrganizationIdField})`,
+    ]
+    : [];
   const literals = applicationIds
     .map((applicationId) => postHogStringLiteral_(applicationId))
     .join(', ');
@@ -1213,12 +1324,14 @@ function fetchPostHogProjectMatchesFromTable_(
     'SELECT',
     `  toString(f.${settings.applicationIdField}) AS application_id,`,
     `  toString(f.${settings.projectIdField}) AS project_id,`,
+    `  ${organizationExpression} AS organization_name,`,
     `  concat(${postHogStringLiteral_(projectUrlPrefix)}, ` +
       `toString(f.${settings.projectIdField}), ` +
       `${postHogStringLiteral_(settings.projectUrlSuffix)}) ` +
       'AS project_url,',
     `  f.${settings.sourceUpdatedAtField} AS source_updated_at`,
     `FROM ${lookupTable} AS f`,
+    ...joinLines,
     `WHERE toString(f.${settings.applicationIdField}) IN (${literals})`,
     `ORDER BY toString(f.${settings.applicationIdField}), ` +
       `f.${settings.sourceUpdatedAtField} DESC, ` +
@@ -1323,12 +1436,14 @@ function parsePostHogProjectMatches_(response) {
   );
   const applicationIdIndex = normalizedColumns.indexOf('application_id');
   const projectIdIndex = normalizedColumns.indexOf('project_id');
+  const organizationNameIndex = normalizedColumns.indexOf('organization_name');
   const projectUrlIndex = normalizedColumns.indexOf('project_url');
   const sourceUpdatedAtIndex = normalizedColumns.indexOf('source_updated_at');
 
   if (
     applicationIdIndex < 0 ||
     projectIdIndex < 0 ||
+    organizationNameIndex < 0 ||
     projectUrlIndex < 0 ||
     sourceUpdatedAtIndex < 0
   ) {
@@ -1340,6 +1455,7 @@ function parsePostHogProjectMatches_(response) {
   return response.results.map((row) => ({
     applicationId: String(row[applicationIdIndex] || '').trim(),
     projectId: String(row[projectIdIndex] || '').trim(),
+    organization: String(row[organizationNameIndex] || '').trim(),
     projectUrl: String(row[projectUrlIndex] || '').trim(),
     sourceUpdatedAt: parsePostHogDate_(row[sourceUpdatedAtIndex]),
   }));
@@ -1388,9 +1504,10 @@ function loadExistingPostHogProjectRows_(sheet) {
     }
     rowsByApplicationId.set(applicationId, {
       projectId: row[1],
-      projectUrl: row[2],
-      sourceUpdatedAt: row[5],
-      matchCount: Number(row[8]) || 0,
+      organization: row[2],
+      projectUrl: row[3],
+      sourceUpdatedAt: row[6],
+      matchCount: Number(row[9]) || 0,
     });
   });
 
@@ -1400,6 +1517,7 @@ function loadExistingPostHogProjectRows_(sheet) {
 function buildPostHogOutputRow_(
   applicationId,
   projectId,
+  organization,
   projectUrl,
   attachmentText,
   googleGroupText,
@@ -1412,6 +1530,7 @@ function buildPostHogOutputRow_(
   return [
     applicationId,
     projectId,
+    organization,
     projectUrl,
     attachmentText,
     googleGroupText,
@@ -1439,7 +1558,7 @@ function buildPostHogGoogleGroupText_(links) {
 }
 
 /**
- * Converts the attachment display text in column D into per-file rich-text
+ * Converts the attachment display text in column E into per-file rich-text
  * hyperlinks. Multiple files remain independently clickable within one cell.
  */
 function applyPostHogAttachmentLinks_(
@@ -1467,13 +1586,13 @@ function applyPostHogAttachmentLinks_(
   });
 
   sheet
-    .getRange(2, 4, richTextRows.length, 1)
+    .getRange(2, 5, richTextRows.length, 1)
     .setRichTextValues(richTextRows)
     .setWrap(true);
 }
 
 /**
- * Converts the Google Groups display text in column E into per-URL rich-text
+ * Converts the Google Groups display text in column F into per-URL rich-text
  * hyperlinks. Multiple exact conversations remain independently clickable.
  */
 function applyPostHogGoogleGroupLinks_(
@@ -1501,7 +1620,7 @@ function applyPostHogGoogleGroupLinks_(
   });
 
   sheet
-    .getRange(2, 5, richTextRows.length, 1)
+    .getRange(2, 6, richTextRows.length, 1)
     .setRichTextValues(richTextRows)
     .setWrap(true);
 }
