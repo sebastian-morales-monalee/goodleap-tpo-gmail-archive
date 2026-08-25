@@ -38,6 +38,7 @@ const OPENAI_ANALYSIS_PROPERTY_KEYS = {
 
 const OPENAI_ANALYSIS_HEADERS = [
   'Gmail Message ID',
+  'Project ID',
   'Application ID',
   'Analyzed At',
   'Email Received At',
@@ -61,6 +62,10 @@ const OPENAI_ANALYSIS_HEADERS = [
   'Analysis Status',
   'Error',
 ];
+
+const LEGACY_OPENAI_ANALYSIS_HEADERS = OPENAI_ANALYSIS_HEADERS.filter(
+  (header) => header !== 'Project ID',
+);
 
 const OPENAI_ANALYSIS_CATEGORIES = [
   'Production',
@@ -113,6 +118,10 @@ function setupOpenAIEmailAnalysis() {
   const settings = getOpenAIAnalysisSettings_();
   const resources = getOrCreateResources_();
   const sheet = getOrCreateOpenAIAnalysisSheet_(resources.spreadsheet);
+  const projectIdStats = applyAnalysisProjectIdsToSheet_(
+    sheet,
+    loadAnalysisProjectIdMap_(resources.spreadsheet),
+  );
 
   console.log('OpenAI email analysis setup completed.');
   console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
@@ -122,6 +131,10 @@ function setupOpenAIEmailAnalysis() {
   console.log(
     `Maximum analyzed email characters: ${settings.maxEmailCharacters}`,
   );
+  console.log(
+    `Project IDs refreshed: ${projectIdStats.populatedRows}; ` +
+    `blank: ${projectIdStats.blankRows}.`,
+  );
   console.log('The OpenAI API key was found and was not logged.');
 
   return {
@@ -129,6 +142,7 @@ function setupOpenAIEmailAnalysis() {
     model: settings.model,
     batchSize: settings.batchSize,
     maxEmailCharacters: settings.maxEmailCharacters,
+    projectIds: projectIdStats,
   };
 }
 
@@ -278,6 +292,12 @@ function processOpenAIEmailAnalysisBatch_(options) {
       resources.spreadsheet,
     );
     const candidates = loadOpenAIEmailCandidates_(resources.spreadsheet);
+    const projectIds = loadAnalysisProjectIdMap_(resources.spreadsheet);
+    candidates.forEach((candidate) => {
+      candidate.projectId = String(
+        projectIds.get(candidate.applicationId) || '',
+      ).trim();
+    });
     const existing = loadExistingOpenAIAnalysisRows_(analysisSheet);
     const retryErrors = Boolean(options && options.retryErrors);
     const requestedBatchSize = Number(options && options.batchSize);
@@ -394,6 +414,7 @@ function getOpenAIAnalysisSettings_() {
 }
 
 function getOrCreateOpenAIAnalysisSheet_(spreadsheet) {
+  migrateOpenAIAnalysisSheetSchema_(spreadsheet);
   const sheet = getOrCreateSheet_(
     spreadsheet,
     OPENAI_ANALYSIS_CONFIG.SHEET_NAME,
@@ -401,24 +422,162 @@ function getOrCreateOpenAIAnalysisSheet_(spreadsheet) {
   );
 
   sheet.setFrozenRows(1);
-  sheet.getRange('C:D').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sheet.getRange('D:E').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   sheet.setColumnWidth(1, 220);
-  sheet.setColumnWidth(2, 130);
-  sheet.setColumnWidth(5, 420);
-  sheet.setColumnWidth(6, 260);
-  sheet.setColumnWidth(7, 190);
-  sheet.setColumnWidth(8, 260);
-  sheet.setColumnWidth(11, 420);
+  sheet.setColumnWidth(2, 280);
+  sheet.setColumnWidth(3, 130);
+  sheet.setColumnWidth(6, 420);
+  sheet.setColumnWidth(7, 260);
+  sheet.setColumnWidth(8, 190);
+  sheet.setColumnWidth(9, 260);
   sheet.setColumnWidth(12, 420);
-  sheet.setColumnWidth(16, 360);
-  sheet.setColumnWidth(17, 420);
-  sheet.setColumnWidth(18, 520);
-  sheet.setColumnWidth(23, 420);
-  sheet.getRange('H:H').setWrap(true);
-  sheet.getRange('K:L').setWrap(true);
-  sheet.getRange('P:R').setWrap(true);
-  sheet.getRange('W:W').setWrap(true);
+  sheet.setColumnWidth(13, 420);
+  sheet.setColumnWidth(17, 360);
+  sheet.setColumnWidth(18, 420);
+  sheet.setColumnWidth(19, 520);
+  sheet.setColumnWidth(24, 420);
+  sheet.getRange('I:I').setWrap(true);
+  sheet.getRange('L:M').setWrap(true);
+  sheet.getRange('Q:S').setWrap(true);
+  sheet.getRange('X:X').setWrap(true);
   return sheet;
+}
+
+function migrateOpenAIAnalysisSheetSchema_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(OPENAI_ANALYSIS_CONFIG.SHEET_NAME);
+  if (!sheet || sheet.getLastRow() === 0) {
+    return;
+  }
+  const headerCount = Math.min(
+    sheet.getLastColumn(),
+    OPENAI_ANALYSIS_HEADERS.length,
+  );
+  const headers = sheet
+    .getRange(1, 1, 1, headerCount)
+    .getDisplayValues()[0];
+  const isCurrent = OPENAI_ANALYSIS_HEADERS.every(
+    (header, index) => headers[index] === header,
+  );
+  if (isCurrent) {
+    return;
+  }
+  const isLegacy = LEGACY_OPENAI_ANALYSIS_HEADERS.every(
+    (header, index) => headers[index] === header,
+  );
+  if (!isLegacy) {
+    return;
+  }
+  sheet.insertColumnBefore(2);
+  formatAnalysisHeaderCell_(sheet.getRange(1, 2), 'Project ID');
+  console.log(
+    'AI Analysis schema upgraded: Project ID was inserted as column B.',
+  );
+}
+
+function formatAnalysisHeaderCell_(range, value) {
+  range
+    .setValue(value)
+    .setFontWeight('bold')
+    .setBackground('#6e04bd')
+    .setFontColor('#ffffff');
+}
+
+function loadAnalysisProjectIdMap_(spreadsheet) {
+  const projectIds = new Map();
+  projectIds.sourceAvailable = false;
+  const sheet = spreadsheet.getSheetByName('PostHog Projects');
+  if (!sheet || sheet.getLastRow() === 0) {
+    return projectIds;
+  }
+  const values = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getDisplayValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const applicationIdIndex = headers.indexOf('Application ID');
+  const projectIdIndex = headers.indexOf('Project ID');
+  if (applicationIdIndex < 0 || projectIdIndex < 0) {
+    return projectIds;
+  }
+  projectIds.sourceAvailable = true;
+  values.slice(1).forEach((row) => {
+    const applicationId = String(row[applicationIdIndex] || '').trim();
+    if (applicationId) {
+      projectIds.set(
+        applicationId,
+        String(row[projectIdIndex] || '').trim(),
+      );
+    }
+  });
+  return projectIds;
+}
+
+function applyAnalysisProjectIdsToSheet_(sheet, projectIds) {
+  if (!sheet || sheet.getLastRow() < 2) {
+    return {rows: 0, populatedRows: 0, blankRows: 0, changedRows: 0};
+  }
+  if (!projectIds || projectIds.sourceAvailable === false) {
+    return {
+      sourceMissing: true,
+      rows: sheet.getLastRow() - 1,
+      populatedRows: 0,
+      blankRows: 0,
+      changedRows: 0,
+    };
+  }
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getDisplayValues()[0]
+    .map((value) => String(value).trim());
+  const applicationIdIndex = requireSheetHeaderIndex_(
+    headers,
+    'Application ID',
+    sheet.getName(),
+  );
+  const projectIdIndex = requireSheetHeaderIndex_(
+    headers,
+    'Project ID',
+    sheet.getName(),
+  );
+  const rowCount = sheet.getLastRow() - 1;
+  const values = sheet
+    .getRange(2, 1, rowCount, sheet.getLastColumn())
+    .getDisplayValues();
+  let populatedRows = 0;
+  let blankRows = 0;
+  let changedRows = 0;
+  const output = values.map((row) => {
+    const applicationId = String(row[applicationIdIndex] || '').trim();
+    const projectId = applicationId
+      ? String(projectIds.get(applicationId) || '').trim()
+      : '';
+    const existingProjectId = String(row[projectIdIndex] || '').trim();
+    if (projectId) {
+      populatedRows += 1;
+    } else {
+      blankRows += 1;
+    }
+    if (projectId !== existingProjectId) {
+      changedRows += 1;
+    }
+    return [safeCellValue_(projectId)];
+  });
+  sheet
+    .getRange(2, projectIdIndex + 1, rowCount, 1)
+    .setValues(output)
+    .setWrap(true);
+  return {rows: rowCount, populatedRows, blankRows, changedRows};
+}
+
+function syncOpenAIAnalysisProjectIdsFromPostHog_(spreadsheet) {
+  const existing = spreadsheet.getSheetByName(OPENAI_ANALYSIS_CONFIG.SHEET_NAME);
+  if (!existing) {
+    return {sheetMissing: true, rows: 0, populatedRows: 0, blankRows: 0};
+  }
+  const sheet = getOrCreateOpenAIAnalysisSheet_(spreadsheet);
+  return applyAnalysisProjectIdsToSheet_(
+    sheet,
+    loadAnalysisProjectIdMap_(spreadsheet),
+  );
 }
 
 function loadOpenAIEmailCandidates_(spreadsheet) {
@@ -785,6 +944,7 @@ function buildOpenAIAnalysisRow_(
   const value = analysis || {};
   return [
     candidate.messageId,
+    candidate.projectId || '',
     candidate.applicationId,
     new Date(),
     candidate.receivedAt || '',

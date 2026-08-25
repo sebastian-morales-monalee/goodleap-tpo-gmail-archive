@@ -131,6 +131,8 @@ It:
   `store: false`.
 - Uses strict Structured Outputs instead of parsing free-form prose.
 - Creates and maintains the `AI Analysis` sheet automatically.
+- Adds `Project ID` as column B and resolves it from `PostHog Projects` by
+  Application ID for historical and future rows.
 - Stores one row per Gmail Message ID, allowing multiple emails for one
   Application ID to retain separate analyses.
 - Classifies one primary category plus every applicable secondary category.
@@ -172,6 +174,8 @@ It:
   cross-table consistency constraints before writing files.
 - Creates `PDF Analysis` automatically with one tracking row per selected
   source PDF.
+- Adds `Project ID` as column B and resolves it from `PostHog Projects` by
+  Application ID for historical and future rows.
 - Creates two CSV files beside the source PDF in Drive: `Summary` and
   `Monthly Solar Access Percentage Across Arrays`.
 - Records unreadable cells and table inconsistencies for human review, while
@@ -213,6 +217,8 @@ It:
 - Looks up new Application IDs immediately after new mail is archived.
 - Retains a separate hourly reconciliation for delayed warehouse records and
   existing mappings.
+- Propagates the latest Project ID mapping to `AI Analysis` and `PDF Analysis`
+  after every successful PostHog synchronization.
 
 The default warehouse mapping is:
 
@@ -245,6 +251,7 @@ Primary functions:
 8. `installHybridGoodLeapPostHogTriggers()`
 9. `installPostHogSyncTrigger()`
 10. `removePostHogSyncTrigger()`
+11. `syncProjectIdsToAnalysisSheets()`
 
 ## Script Properties
 
@@ -653,6 +660,32 @@ The row count is dynamic: one, three, or more Array IDs are all valid. Older or
 equivalent report attachments are not sent to OpenAI and are recorded as
 suppressed duplicates in `PDF Analysis`.
 
+### Adding Project ID to existing AI Analysis and PDF Analysis sheets
+
+Do not insert either column manually. The migration preserves all existing
+rows and inserts `Project ID` automatically as column B:
+
+- `AI Analysis`: `Gmail Message ID`, `Project ID`, `Application ID`, ...
+- `PDF Analysis`: `Source Drive File ID`, `Project ID`, `Application ID`, ...
+
+For an existing installation:
+
+1. Replace `OpenAIAnalysis.gs`, `OpenAIPdfExtraction.gs`, and `PostHogSync.gs`
+   with the repository versions and save the Apps Script project.
+2. Run `syncProjectIdsToAnalysisSheets()` from `PostHogSync.gs` and review its
+   `populatedRows`, `blankRows`, and `changedRows` statistics.
+3. Verify one GoodLeap match, one Artemis Sales fallback match, and—if
+   available—one `Multiple Matches` row. Multiple Project IDs remain on
+   separate lines exactly as represented in `PostHog Projects`.
+4. Confirm that the existing five-minute and hourly triggers remain unchanged.
+
+`syncProjectIdsToAnalysisSheets()` makes no PostHog or OpenAI API request. It
+uses the current contents of `PostHog Projects`. A blank value means that the
+Application ID currently has no Project ID there. Future five-minute and hourly
+PostHog synchronizations refresh both analysis sheets automatically, including
+records that become available later. Running either OpenAI setup function is
+also safe and idempotent, but it is not required for this migration.
+
 ### Adding Attachment Links to an existing installation
 
 For an installation that still has `PostHog Projects` with the original
@@ -796,6 +829,9 @@ stop all PostHog calls while keeping Gmail automation, run
 - When new messages were archived, `PostHogSync.gs` immediately refreshes the
   derived project lookup and its Drive attachment links.
 - Every hour, `PostHogSync.gs` performs the same reconciliation as a fallback.
+- Every successful PostHog reconciliation refreshes `Project ID` in both
+  analysis sheets by matching their `Application ID` values. `Not Found` rows
+  remain blank until a later synchronization returns a Project ID.
 - Both workflows use the same Apps Script lock, preventing overlapping writes.
 - Empty Gmail checks do not create PostHog requests.
 - The PostHog sync sends Application IDs only; it does not send email bodies,
@@ -819,6 +855,8 @@ The deployment is ready only when all of the following are true:
   Shade Report.
 - `PDF Analysis` links to valid Summary and Monthly CSV files and has no
   unexplained `Error` or human-review rows.
+- `AI Analysis` and `PDF Analysis` contain the same Project ID shown for their
+  Application ID in `PostHog Projects`, or remain blank when it is `Not Found`.
 - The **Triggers** page shows one
   `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
   `syncPostHogProjects` hourly trigger owned by the operating account.

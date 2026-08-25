@@ -47,6 +47,7 @@ const OPENAI_PDF_PROPERTY_KEYS = {
 
 const OPENAI_PDF_HEADERS = [
   'Source Drive File ID',
+  'Project ID',
   'Application ID',
   'Analyzed At',
   'Source Received At',
@@ -69,6 +70,10 @@ const OPENAI_PDF_HEADERS = [
   'Extraction Status',
   'Error',
 ];
+
+const LEGACY_OPENAI_PDF_HEADERS = OPENAI_PDF_HEADERS.filter(
+  (header) => header !== 'Project ID',
+);
 
 const OPENAI_PDF_ATTACHMENT_REQUIRED_HEADERS = [
   'Processed At',
@@ -107,6 +112,10 @@ function setupOpenAIPdfExtraction() {
   const settings = getOpenAIPdfSettings_();
   const resources = getOrCreateResources_();
   const sheet = getOrCreateOpenAIPdfSheet_(resources.spreadsheet);
+  const projectIdStats = applyAnalysisProjectIdsToSheet_(
+    sheet,
+    loadAnalysisProjectIdMap_(resources.spreadsheet),
+  );
 
   console.log('OpenAI PDF extraction setup completed.');
   console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
@@ -114,6 +123,10 @@ function setupOpenAIPdfExtraction() {
   console.log(`OpenAI PDF model: ${settings.model}`);
   console.log(`PDF extraction batch size: ${settings.batchSize}`);
   console.log(`Maximum PDF bytes: ${settings.maxFileBytes}`);
+  console.log(
+    `Project IDs refreshed: ${projectIdStats.populatedRows}; ` +
+    `blank: ${projectIdStats.blankRows}.`,
+  );
   console.log('The OpenAI API key was found and was not logged.');
 
   return {
@@ -121,6 +134,7 @@ function setupOpenAIPdfExtraction() {
     model: settings.model,
     batchSize: settings.batchSize,
     maxFileBytes: settings.maxFileBytes,
+    projectIds: projectIdStats,
   };
 }
 
@@ -296,6 +310,12 @@ function processOpenAIPdfBatch_(options) {
     const resources = getOrCreateResources_();
     const sheet = getOrCreateOpenAIPdfSheet_(resources.spreadsheet);
     const candidates = loadSelectedOpenAIPdfCandidates_(resources.spreadsheet);
+    const projectIds = loadAnalysisProjectIdMap_(resources.spreadsheet);
+    candidates.forEach((candidate) => {
+      candidate.projectId = String(
+        projectIds.get(candidate.applicationId) || '',
+      ).trim();
+    });
     const existing = loadExistingOpenAIPdfRows_(sheet);
     const retryErrors = Boolean(options && options.retryErrors);
     const batchSize = clampOpenAIInteger_(
@@ -437,27 +457,72 @@ function getOpenAIPdfSettings_() {
 }
 
 function getOrCreateOpenAIPdfSheet_(spreadsheet) {
+  migrateOpenAIPdfSheetSchema_(spreadsheet);
   const sheet = getOrCreateSheet_(
     spreadsheet,
     OPENAI_PDF_CONFIG.SHEET_NAME,
     OPENAI_PDF_HEADERS,
   );
   sheet.setFrozenRows(1);
-  sheet.getRange('C:D').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sheet.getRange('D:E').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   sheet.setColumnWidth(1, 230);
-  sheet.setColumnWidth(2, 130);
-  sheet.setColumnWidth(5, 420);
-  sheet.setColumnWidth(6, 320);
-  sheet.setColumnWidth(7, 260);
-  sheet.setColumnWidth(10, 420);
-  sheet.setColumnWidth(13, 320);
+  sheet.setColumnWidth(2, 280);
+  sheet.setColumnWidth(3, 130);
+  sheet.setColumnWidth(6, 420);
+  sheet.setColumnWidth(7, 320);
+  sheet.setColumnWidth(8, 260);
+  sheet.setColumnWidth(11, 420);
   sheet.setColumnWidth(14, 320);
-  sheet.setColumnWidth(17, 520);
-  sheet.setColumnWidth(22, 420);
-  sheet.getRange('J:J').setWrap(true);
-  sheet.getRange('Q:Q').setWrap(true);
-  sheet.getRange('V:V').setWrap(true);
+  sheet.setColumnWidth(15, 320);
+  sheet.setColumnWidth(18, 520);
+  sheet.setColumnWidth(23, 420);
+  sheet.getRange('K:K').setWrap(true);
+  sheet.getRange('R:R').setWrap(true);
+  sheet.getRange('W:W').setWrap(true);
   return sheet;
+}
+
+function migrateOpenAIPdfSheetSchema_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(OPENAI_PDF_CONFIG.SHEET_NAME);
+  if (!sheet || sheet.getLastRow() === 0) {
+    return;
+  }
+  const headerCount = Math.min(
+    sheet.getLastColumn(),
+    OPENAI_PDF_HEADERS.length,
+  );
+  const headers = sheet
+    .getRange(1, 1, 1, headerCount)
+    .getDisplayValues()[0];
+  const isCurrent = OPENAI_PDF_HEADERS.every(
+    (header, index) => headers[index] === header,
+  );
+  if (isCurrent) {
+    return;
+  }
+  const isLegacy = LEGACY_OPENAI_PDF_HEADERS.every(
+    (header, index) => headers[index] === header,
+  );
+  if (!isLegacy) {
+    return;
+  }
+  sheet.insertColumnBefore(2);
+  formatAnalysisHeaderCell_(sheet.getRange(1, 2), 'Project ID');
+  console.log(
+    'PDF Analysis schema upgraded: Project ID was inserted as column B.',
+  );
+}
+
+function syncOpenAIPdfProjectIdsFromPostHog_(spreadsheet) {
+  const existing = spreadsheet.getSheetByName(OPENAI_PDF_CONFIG.SHEET_NAME);
+  if (!existing) {
+    return {sheetMissing: true, rows: 0, populatedRows: 0, blankRows: 0};
+  }
+  const sheet = getOrCreateOpenAIPdfSheet_(spreadsheet);
+  return applyAnalysisProjectIdsToSheet_(
+    sheet,
+    loadAnalysisProjectIdMap_(spreadsheet),
+  );
 }
 
 function loadSelectedOpenAIPdfCandidates_(spreadsheet) {
@@ -1051,6 +1116,7 @@ function buildOpenAIPdfTrackingRow_(
   const sourcePages = value.source_pages || {};
   return [
     candidate.driveFileId,
+    candidate.projectId || '',
     candidate.applicationId,
     new Date(),
     candidate.receivedAt || '',

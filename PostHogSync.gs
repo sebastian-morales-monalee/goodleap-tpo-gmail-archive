@@ -638,6 +638,9 @@ function syncPostHogProjects() {
       applicationIds,
       googleGroupLinksByApplicationId,
     );
+    stats.analysisProjectIds = syncPostHogProjectIdsToAnalysisSheets_(
+      resources.spreadsheet,
+    );
     SpreadsheetApp.flush();
 
     console.log(JSON.stringify(stats, null, 2));
@@ -647,6 +650,45 @@ function syncPostHogProjects() {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Refreshes Project ID in AI Analysis and PDF Analysis from the current
+ * PostHog Projects sheet without making a PostHog or OpenAI API request.
+ */
+function syncProjectIdsToAnalysisSheets() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    console.log(
+      'Another GoodLeap execution is running. Project ID refresh was skipped safely.',
+    );
+    return {skippedBecauseLocked: true};
+  }
+  try {
+    const resources = getOrCreateResources_();
+    const stats = syncPostHogProjectIdsToAnalysisSheets_(
+      resources.spreadsheet,
+    );
+    SpreadsheetApp.flush();
+    console.log(JSON.stringify(stats, null, 2));
+    return stats;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function syncPostHogProjectIdsToAnalysisSheets_(spreadsheet) {
+  const stats = {
+    aiAnalysis: {sheetMissing: true},
+    pdfAnalysis: {sheetMissing: true},
+  };
+  if (typeof syncOpenAIAnalysisProjectIdsFromPostHog_ === 'function') {
+    stats.aiAnalysis = syncOpenAIAnalysisProjectIdsFromPostHog_(spreadsheet);
+  }
+  if (typeof syncOpenAIPdfProjectIdsFromPostHog_ === 'function') {
+    stats.pdfAnalysis = syncOpenAIPdfProjectIdsFromPostHog_(spreadsheet);
+  }
+  return stats;
 }
 
 /**
