@@ -651,7 +651,8 @@ function syncPostHogProjects() {
 
 /**
  * Runs from the integrated five-minute trigger. After each successful Gmail
- * check, the coordinator processes a bounded batch of pending OpenAI rows.
+ * check, the coordinator processes bounded batches of pending OpenAI email
+ * analyses and Shade Report PDF extractions.
  * This safely picks up a message that was skipped because another execution
  * held the lock. PostHog is refreshed only when at least one new message was
  * archived. OpenAI failures cannot prevent the PostHog step. The separate
@@ -667,12 +668,14 @@ function processRecentGoodLeapEmailsAndSyncPostHog() {
     return {
       gmail: gmailStats || null,
       openAI: null,
+      openAIPdf: null,
       postHog: null,
       postHogSkipped: true,
     };
   }
 
   const openAIStats = analyzeRecentGoodLeapEmailsWithOpenAI();
+  const openAIPdfStats = processRecentShadeReportPdfsWithOpenAI();
 
   if (Number(gmailStats.messagesProcessed || 0) === 0) {
     console.log(
@@ -681,6 +684,7 @@ function processRecentGoodLeapEmailsAndSyncPostHog() {
     return {
       gmail: gmailStats,
       openAI: openAIStats,
+      openAIPdf: openAIPdfStats,
       postHog: null,
       postHogSkipped: true,
     };
@@ -695,6 +699,7 @@ function processRecentGoodLeapEmailsAndSyncPostHog() {
   return {
     gmail: gmailStats,
     openAI: openAIStats,
+    openAIPdf: openAIPdfStats,
     postHog: postHogStats,
     postHogSkipped: false,
   };

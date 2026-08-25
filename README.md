@@ -3,8 +3,8 @@
 This project automates the collection and indexing of GoodLeap TPO email
 messages, saves their attachments in Google Drive when present, and enriches
 the archive with the corresponding Artemis Sales Project ID from PostHog. It
-also classifies each archived email through the OpenAI Responses API and writes
-a structured operational summary to a separate sheet.
+also classifies each archived email and extracts the two tabular datasets from
+Shade Report PDFs through the OpenAI Responses API.
 
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
@@ -23,6 +23,11 @@ Integrated trigger (every 5 minutes)
         +-------------------------> Code.gs -> Drive + archive sheets
         |
         +--- pending batch each check -> OpenAIAnalysis.gs -> AI Analysis
+        |
+        +--- pending Shade Reports -> OpenAIPdfExtraction.gs
+        |                                  |-> PDF Analysis
+        |                                  |-> Summary CSV
+        |                                  `-> Monthly CSV
         |
         +--- only after new mail -> PostHogSync.gs -> PostHog Projects
                                              ^
@@ -150,6 +155,38 @@ The current taxonomy is multi-label and includes `Production`, `Layout`,
 `Equipment`, `Shading / Site Conditions`, `Structure`, `Documentation`,
 `Offset`, `Communication / Follow-up`, and `Other`.
 
+### `OpenAIPdfExtraction.gs`
+
+The independent Shade Report table-extraction workflow.
+
+It:
+
+- Selects the newest Shade Report PDF for each Application ID and records how
+  many older or equivalent candidate files were suppressed.
+- Sends the complete PDF to the OpenAI Responses API at high visual detail with
+  `store: false` and a strict Structured Output schema.
+- Inspects every page so a table that continues beyond page 1 remains in scope.
+- Extracts every dynamic Array ID row; it does not assume that a report has a
+  fixed number of arrays.
+- Validates percentage, azimuth, pitch, panel-count, duplicate-ID, and
+  cross-table consistency constraints before writing files.
+- Creates `PDF Analysis` automatically with one tracking row per selected
+  source PDF.
+- Creates two CSV files beside the source PDF in Drive: `Summary` and
+  `Monthly Solar Access Percentage Across Arrays`.
+- Records unreadable cells and table inconsistencies for human review, while
+  isolating failed PDFs from Gmail archiving and PostHog synchronization.
+
+Primary functions:
+
+1. `setupOpenAIPdfExtraction()`
+2. `testOpenAIPdfConnection()`
+3. `previewShadeReportPdfCandidates()`
+4. `previewOpenAIPdfExtraction()`
+5. `extractPendingShadeReportPdfsWithOpenAI()`
+6. `extractShadeReportPdfHistoryWithOpenAI()`
+7. `retryFailedOpenAIPdfExtractions()`
+
 ### `PostHogSync.gs`
 
 The PostHog enrichment workflow.
@@ -226,8 +263,9 @@ Personal API Key in `.env.example` or commit a populated `.env` file.
    this automation's usage.
 2. Create a project API key for this workflow and copy it once.
 3. Add the key as `OPENAI_API_KEY` in Apps Script Script Properties.
-4. Add `OPENAI_MODEL` with `gpt-5.4-mini`, or another model that supports both
-   the Responses API and Structured Outputs after validating the change.
+4. Add `OPENAI_MODEL` with `gpt-5.4-mini` for email analysis.
+5. Add `OPENAI_PDF_MODEL` with `gpt-5.4-mini` for PDF extraction. This is a
+   model selector, not another API key; both workflows reuse `OPENAI_API_KEY`.
 
 Never use a ChatGPT password or session token. API access, billing, and model
 permissions belong to the selected OpenAI API project.
@@ -238,6 +276,7 @@ Required OpenAI properties:
 | --- | --- | --- |
 | `OPENAI_API_KEY` | `sk-proj-...` | Project API key used only in the Authorization header |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | Model used for structured email classification |
+| `OPENAI_PDF_MODEL` | `gpt-5.4-mini` | Vision-capable model used for structured Shade Report PDF extraction |
 
 Optional OpenAI properties:
 
@@ -245,6 +284,8 @@ Optional OpenAI properties:
 | --- | --- | --- |
 | `OPENAI_ANALYSIS_BATCH_SIZE` | `10` | Maximum messages processed by each manual batch, limited to 20 |
 | `OPENAI_MAX_EMAIL_CHARACTERS` | `30000` | Maximum cleaned characters sent from one email, limited to 100000 |
+| `OPENAI_PDF_BATCH_SIZE` | `2` | Maximum representative PDFs processed per run, limited to 5 |
+| `OPENAI_PDF_MAX_FILE_BYTES` | `15728640` | Maximum source PDF size accepted by the script, capped at 35 MiB |
 
 ### Obtain the three PostHog values
 
@@ -328,7 +369,12 @@ complete function order is:
 | 9 | `testOpenAIConnection()` | `OpenAIAnalysis.gs` | Verify API authentication, model access, and Structured Outputs |
 | 10 | `previewOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Analyze one email without writing the AI Analysis sheet |
 | 11 | `analyzePendingGoodLeapEmailsWithOpenAI()` | `OpenAIAnalysis.gs` | Write the first bounded historical analysis batch; rerun until pending is zero |
-| 12 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 12 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
+| 13 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
+| 14 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
+| 15 | `previewOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Extract one complete PDF without writing a row or CSV files |
+| 16 | `extractPendingShadeReportPdfsWithOpenAI()` | `OpenAIPdfExtraction.gs` | Write one bounded historical PDF batch; rerun until pendingPdfs is zero |
+| 17 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -346,12 +392,13 @@ steps for every new deployment.
 Create a standalone Google Apps Script project and set its time zone to
 `America/Bogota`.
 
-Add four script files to the same project:
+Add five script files to the same project:
 
 - `Code.gs`
 - `ManualBackfill.gs`
 - `PostHogSync.gs`
 - `OpenAIAnalysis.gs`
+- `OpenAIPdfExtraction.gs`
 
 `README.md` is repository documentation and does not need to be pasted into
 the Apps Script editor.
@@ -475,7 +522,7 @@ Google Groups links are matched by `Emails.Case ID` to the same Application
 ID. Duplicate URLs are suppressed. Exact `/c/{token}` conversation URLs take
 precedence; when no exact URL exists, the Case-ID search fallback is displayed.
 
-### 6. Validate OpenAI and enable the hybrid schedule
+### 6. Validate OpenAI email and PDF workflows, then enable the schedule
 
 Before installing the schedule, initialize and validate OpenAI:
 
@@ -492,6 +539,24 @@ Before installing the schedule, initialize and validate OpenAI:
 7. Investigate every row marked `Error`. After correcting the cause, run
    `retryFailedOpenAIEmailAnalyses()` to retry only failed rows.
 
+Next, initialize and validate Shade Report extraction:
+
+1. Open `OpenAIPdfExtraction.gs` in the Apps Script editor.
+2. Run `setupOpenAIPdfExtraction()` and confirm that `PDF Analysis` is created.
+3. Run `testOpenAIPdfConnection()` and confirm that authentication, model
+   access, and the strict schema pass without sending a Drive PDF.
+4. Run `previewShadeReportPdfCandidates()` and verify the chosen filename for
+   each Application ID and the number of omitted duplicates.
+5. Run `previewOpenAIPdfExtraction()` and compare the logged Array IDs and row
+   counts with one source report. This consumes API tokens but writes no row or
+   CSV file.
+6. Run `extractPendingShadeReportPdfsWithOpenAI()` to process one bounded
+   historical batch. Rerun it until the log reports `pendingPdfs: 0`.
+7. Review `PDF Analysis` and open both CSV links for reports containing one,
+   three, or more Array IDs. Investigate rows marked `Error` or requiring human
+   review. After correcting an error, run
+   `retryFailedOpenAIPdfExtractions()` to retry only failed rows.
+
 Only after the first manual sync is correct, run:
 
 ```text
@@ -504,12 +569,13 @@ then creates exactly two:
 - `processRecentGoodLeapEmailsAndSyncPostHog` every five minutes;
 - `syncPostHogProjects` every hour.
 
-The five-minute coordinator always checks Gmail and then processes a bounded
-batch of pending OpenAI rows. When no row is pending, no OpenAI request is
-created. PostHog is called immediately only when at least one new message was
-archived. The hourly trigger retries Application IDs that may not yet have
-reached the PostHog warehouse and reconciles existing rows. The installer is
-idempotent and can be rerun without accumulating duplicate triggers.
+The five-minute coordinator always checks Gmail and then processes bounded
+batches of pending email analyses and Shade Report PDFs. When neither workflow
+has pending work, no OpenAI request is created. PostHog is called immediately
+only when at least one new message was archived. The hourly trigger retries
+Application IDs that may not yet have reached the PostHog warehouse and
+reconciles existing rows. The installer is idempotent and can be rerun without
+accumulating duplicate triggers.
 
 The Google account that runs this installer owns both triggers. Run it while
 signed in as the account whose Gmail mailbox will be monitored.
@@ -557,6 +623,35 @@ The new `AI Analysis` tab is independent from `PostHog Projects`. It is keyed
 by Gmail Message ID rather than Application ID, so several emails for the same
 project preserve their own categories, status, reasons, and summary. Do not
 insert, remove, rename, or reorder its managed columns.
+
+### Adding Shade Report PDF extraction to an existing installation
+
+An installation that already has the integrated five-minute trigger does not
+need a third trigger.
+
+1. Create `OpenAIPdfExtraction.gs` in the same Apps Script project and paste
+   the repository version. Save it before modifying the coordinator.
+2. Keep the existing `OPENAI_API_KEY`; do not create or store a second key.
+   Add `OPENAI_PDF_MODEL=gpt-5.4-mini` in Script Properties.
+3. Run `setupOpenAIPdfExtraction()`.
+4. Run `testOpenAIPdfConnection()`.
+5. Run `previewShadeReportPdfCandidates()` and confirm the representative PDF
+   chosen for each Application ID.
+6. Run `previewOpenAIPdfExtraction()` and compare its output with the source
+   PDF. The preview creates neither `PDF Analysis` data nor CSV files.
+7. Run `extractPendingShadeReportPdfsWithOpenAI()` repeatedly until
+   `pendingPdfs` is `0`, reviewing `PDF Analysis` and both CSV links.
+8. Replace `PostHogSync.gs` with the repository version and save it.
+9. Do not reinstall or edit the triggers. The existing
+   `processRecentGoodLeapEmailsAndSyncPostHog` trigger resolves the new PDF
+   function from the shared Apps Script runtime on its next five-minute run.
+10. Confirm that the Triggers page still shows exactly the existing integrated
+    five-minute trigger and hourly PostHog trigger.
+
+The source selector processes the newest Shade Report PDF per Application ID.
+The row count is dynamic: one, three, or more Array IDs are all valid. Older or
+equivalent report attachments are not sent to OpenAI and are recorded as
+suppressed duplicates in `PDF Analysis`.
 
 ### Adding Attachment Links to an existing installation
 
@@ -689,6 +784,13 @@ stop all PostHog calls while keeping Gmail automation, run
 - An OpenAI error is written to that message's analysis row and does not block
   the following PostHog synchronization. Failed rows require an explicit
   reviewed retry.
+- After each successful Gmail check, `OpenAIPdfExtraction.gs` selects a bounded
+  batch of not-yet-extracted Shade Report PDFs. It writes `PDF Analysis` and
+  creates Summary and Monthly CSV files beside each source PDF in Drive. No PDF
+  API call is made when the pending batch is empty.
+- Each Application ID uses its newest Shade Report candidate. Suppressed older
+  or equivalent PDFs are counted, and all Array ID rows found across every
+  relevant page are retained.
 - Each new `Emails` row receives its exact Google Groups conversation URL when
   that link is available in the source message.
 - When new messages were archived, `PostHogSync.gs` immediately refreshes the
@@ -712,6 +814,11 @@ The deployment is ready only when all of the following are true:
 - `previewOpenAIEmailAnalysis()` returns a reasonable classification.
 - `AI Analysis` contains one successful row for every intended historical
   Gmail Message ID, with no unexplained `Error` rows.
+- `testOpenAIPdfConnection()` passes and does not expose the API key.
+- `previewOpenAIPdfExtraction()` returns all visible Array IDs for a verified
+  Shade Report.
+- `PDF Analysis` links to valid Summary and Monthly CSV files and has no
+  unexplained `Error` or human-review rows.
 - The **Triggers** page shows one
   `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
   `syncPostHogProjects` hourly trigger owned by the operating account.
@@ -727,7 +834,7 @@ new source record can remain temporarily unavailable in PostHog.
 
 1. Confirm that the target account receives the group messages in Gmail and
    can access the intended PostHog environment.
-2. Copy the four `.gs` files into a new standalone Apps Script project.
+2. Copy the five `.gs` files into a new standalone Apps Script project.
 3. Review the Gmail query, historical start date, and time zone.
 4. Obtain a new purpose-specific PostHog Personal API Key; do not reuse another
    person's key.
@@ -735,13 +842,15 @@ new source record can remain temporarily unavailable in PostHog.
    OpenAI and PostHog Script Properties.
 6. Run the Gmail setup, preview, and historical import sequence.
 7. Run the PostHog setup, connection test, preview, and first synchronization.
-8. Run the OpenAI setup, connection test, preview, and bounded historical
-   analysis. Review the derived output before enabling automation.
-9. Use the schema inspection functions only if the default mapping fails in
+8. Run the OpenAI email setup, connection test, preview, and bounded historical
+   analysis.
+9. Run the OpenAI PDF setup, connection test, candidate preview, extraction
+   preview, and bounded historical extraction. Review both generated CSVs.
+10. Use the schema inspection functions only if the default mapping fails in
    the target environment.
-10. After all workflows have been validated, run
+11. After all workflows have been validated, run
    `installHybridGoodLeapPostHogTriggers()`.
-11. Confirm that exactly one integrated five-minute trigger and one hourly
+12. Confirm that exactly one integrated five-minute trigger and one hourly
    PostHog trigger exist.
 
 All Drive folders, Sheets tabs, Gmail labels, and time-based triggers are
@@ -754,14 +863,16 @@ created by setup functions. They do not need to be created manually.
 - Verify that `OPENAI_API_KEY` contains an active API project key and has no
   surrounding quotes or spaces.
 - Verify that the selected API project has billing enabled and permission to
-  use the exact `OPENAI_MODEL` value.
-- Run `testOpenAIConnection()` again after replacing or rotating the key.
+  use the exact `OPENAI_MODEL` and `OPENAI_PDF_MODEL` values.
+- Run `testOpenAIConnection()` and `testOpenAIPdfConnection()` again after
+  replacing or rotating the key.
 - Do not paste the key into execution logs while diagnosing the request.
 
 ### HTTP 429 or OpenAI quota error
 
 - Review the OpenAI API project's usage limits and billing status.
 - Reduce `OPENAI_ANALYSIS_BATCH_SIZE` before a historical backfill.
+- Reduce `OPENAI_PDF_BATCH_SIZE` before a PDF historical backfill.
 - Wait for the applicable rate-limit window, then run
   `retryFailedOpenAIEmailAnalyses()` once.
 - Successful Gmail, Drive, Sheets, and PostHog work remains valid; do not rerun
@@ -774,6 +885,34 @@ created by setup functions. They do not need to be created manually.
 - Run `retryFailedOpenAIEmailAnalyses()` to retry only rows marked `Error`.
 - Do not delete successful rows and do not run the historical Gmail import as
   an AI retry mechanism.
+
+### A PDF Analysis row is marked `Error`
+
+- Read the row's `Error` cell and correct authentication, quota, model, Drive
+  access, file-size, or source-PDF issues.
+- Verify that `OPENAI_PDF_MAX_FILE_BYTES` is large enough for the report but no
+  larger than required. The script caps this setting at 35 MiB to leave Apps
+  Script headroom for Base64 encoding and request serialization.
+- Run `retryFailedOpenAIPdfExtractions()` to retry only rows marked `Error`.
+- Do not delete successful rows or rerun the Gmail import as a PDF retry.
+
+### No Shade Report PDF candidate is found
+
+- Confirm that the file appears in `Attachments`, has a Drive File ID, and is a
+  PDF whose filename contains both `Shade` and `Report`.
+- Run `previewShadeReportPdfCandidates()` before making any API request.
+- If the supplier changes its naming convention, review and update
+  `isOpenAIShadeReportFilename_()` deliberately; do not broaden it to every PDF
+  without evaluating cost and data scope.
+
+### A PDF row requires human review
+
+- Open the source PDF and compare every Array ID across both tables and all
+  reported source pages.
+- Human review is expected when a value is unreadable, an Array ID appears in
+  only one table, or the model explicitly reports uncertainty.
+- The CSV files retain blank cells for unreadable values instead of inventing
+  numbers.
 
 ### HTTP 401 or 403 from PostHog
 
@@ -844,9 +983,13 @@ currently holds the shared Apps Script lock. The next scheduled run will retry.
 - Keep the Apps Script editor list limited because editors can access Script
   Properties.
 - Rotate either key if its owner leaves the project or exposure is suspected.
-- The OpenAI request sends the cleaned newest email body plus the Application
-  ID, sender, subject, extracted production fields, and review type. It does
-  not send Drive attachments or PostHog data.
+- The email-analysis request sends the cleaned newest email body plus the
+  Application ID, sender, subject, extracted production fields, and review
+  type. It does not send Drive attachments or PostHog data.
+- The PDF-extraction request sends the selected complete Shade Report PDF plus
+  its Application ID and filename to OpenAI. Older suppressed duplicates,
+  unrelated attachments, email bodies, and PostHog data are not sent by that
+  request.
 - OpenAI requests set `store: false`. Applicable API data controls and retention
   still depend on the OpenAI organization's configuration and current terms.
 - The scripts never delete, archive, or mark Gmail messages as read.
@@ -856,6 +999,7 @@ currently holds the shared Apps Script lock. The next scheduled run will retry.
 
 - [OpenAI Responses API](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
 - [OpenAI GPT-5.4 mini model](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
+- [OpenAI file inputs](https://developers.openai.com/api/docs/guides/file-inputs)
 - [PostHog API overview](https://posthog.com/docs/api)
 - [PostHog Personal API keys](https://posthog.com/docs/api/personal-api-keys)
 - [Google Apps Script Properties Service](https://developers.google.com/apps-script/guides/properties)
