@@ -24,6 +24,7 @@ const POSTHOG_SYNC_CONFIG = {
   SHEET_NAME: 'PostHog Projects',
   SOURCE_SHEET_NAME: 'Emails',
   SOURCE_APPLICATION_ID_HEADER: 'Case ID',
+  SOURCE_GOOGLE_GROUP_URL_HEADER: 'Google Group URL',
   ATTACHMENTS_SHEET_NAME: 'Attachments',
   ATTACHMENT_APPLICATION_ID_HEADER: 'Case ID',
   ATTACHMENT_FILENAME_HEADER: 'Original Filename',
@@ -32,12 +33,14 @@ const POSTHOG_SYNC_CONFIG = {
   // PostHog schema discovery confirms that the financier table contains the
   // Application ID and its related Artemis project ID directly.
   DEFAULT_LOOKUP_TABLE: 'goodleap_postgres_financiers',
+  DEFAULT_FALLBACK_LOOKUP_TABLE: 'artemis_sales_postgres_financiers',
   DEFAULT_APPLICATION_ID_FIELD: 'application_id',
   DEFAULT_PROJECT_ID_FIELD: 'project_id',
   DEFAULT_SOURCE_UPDATED_AT_FIELD: 'updated_at',
 
   // Existing GoodLeap records in this repository use this URL shape.
   DEFAULT_PROJECT_URL_PREFIX: 'https://goodleap.artemis.solar/projects/',
+  DEFAULT_FALLBACK_PROJECT_URL_PREFIX: 'https://sales.artemis.solar/projects/',
   DEFAULT_PROJECT_URL_SUFFIX: '/proposal',
 
   PREVIEW_APPLICATION_ID_LIMIT: 10,
@@ -54,10 +57,12 @@ const POSTHOG_PROPERTY_KEYS = {
 
   // Optional overrides. The defaults above are used when these are absent.
   LOOKUP_TABLE: 'POSTHOG_GOODLEAP_LOOKUP_TABLE',
+  FALLBACK_LOOKUP_TABLE: 'POSTHOG_ARTEMIS_SALES_LOOKUP_TABLE',
   APPLICATION_ID_FIELD: 'POSTHOG_APPLICATION_ID_FIELD',
   PROJECT_ID_FIELD: 'POSTHOG_GOODLEAP_PROJECT_ID_FIELD',
   SOURCE_UPDATED_AT_FIELD: 'POSTHOG_SOURCE_UPDATED_AT_FIELD',
   PROJECT_URL_PREFIX: 'POSTHOG_PROJECT_URL_PREFIX',
+  FALLBACK_PROJECT_URL_PREFIX: 'POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX',
   PROJECT_URL_SUFFIX: 'POSTHOG_PROJECT_URL_SUFFIX',
 };
 
@@ -66,6 +71,7 @@ const POSTHOG_PROJECT_HEADERS = [
   'Project ID',
   'Project URL',
   'Attachment Links',
+  'Google Group URL',
   'Source Updated At',
   'Last Synced At',
   'Match Status',
@@ -73,10 +79,22 @@ const POSTHOG_PROJECT_HEADERS = [
   'Error',
 ];
 
-const LEGACY_POSTHOG_PROJECT_HEADERS = [
+const LEGACY_POSTHOG_PROJECT_HEADERS_V1 = [
   'Application ID',
   'Project ID',
   'Project URL',
+  'Source Updated At',
+  'Last Synced At',
+  'Match Status',
+  'Match Count',
+  'Error',
+];
+
+const LEGACY_POSTHOG_PROJECT_HEADERS_V2 = [
+  'Application ID',
+  'Project ID',
+  'Project URL',
+  'Attachment Links',
   'Source Updated At',
   'Last Synced At',
   'Match Status',
@@ -99,6 +117,11 @@ function setupPostHogProjectSync() {
   console.log(`PostHog host: ${settings.host}`);
   console.log(`PostHog environment ID: ${settings.projectId}`);
   console.log(`GoodLeap lookup table: ${settings.lookupTable}`);
+  console.log(`Artemis Sales fallback table: ${settings.fallbackLookupTable}`);
+  console.log(`GoodLeap project URL prefix: ${settings.projectUrlPrefix}`);
+  console.log(
+    `Artemis Sales project URL prefix: ${settings.fallbackProjectUrlPrefix}`,
+  );
   console.log(`Application ID field: ${settings.applicationIdField}`);
   console.log(`Project ID field: ${settings.projectIdField}`);
   console.log('The personal API key was found and was not logged.');
@@ -109,6 +132,7 @@ function setupPostHogProjectSync() {
     postHogHost: settings.host,
     postHogProjectId: settings.projectId,
     lookupTable: settings.lookupTable,
+    fallbackLookupTable: settings.fallbackLookupTable,
     applicationIdField: settings.applicationIdField,
     projectIdField: settings.projectIdField,
   };
@@ -335,7 +359,8 @@ function previewPostHogProjectMatches() {
 
     applicationMatches.forEach((match) => {
       console.log(
-        `[MATCH] ${applicationId} | ${match.projectId} | ${match.projectUrl}`,
+        `[MATCH] ${applicationId} | ${match.projectId} | ${match.projectUrl} | ` +
+        `${match.lookupSource}`,
       );
     });
   });
@@ -353,6 +378,16 @@ function previewPostHogProjectMatches() {
     matchedApplicationIds: matchedApplicationIds.length,
     notFoundApplicationIds: sampleIds.length - matchedApplicationIds.length,
     duplicateApplicationIds,
+    matchedFromGoodLeap: new Set(
+      matches
+        .filter((match) => match.lookupSource === 'GoodLeap')
+        .map((match) => match.applicationId),
+    ).size,
+    matchedFromArtemisSales: new Set(
+      matches
+        .filter((match) => match.lookupSource === 'Artemis Sales')
+        .map((match) => match.applicationId),
+    ).size,
   };
 
   console.log(JSON.stringify(summary, null, 2));
@@ -396,6 +431,8 @@ function syncPostHogProjects() {
     const applicationIds = loadUniquePostHogApplicationIds_(emailsSheet);
     const attachmentLinksByApplicationId =
       loadPostHogAttachmentLinks_(attachmentsSheet);
+    const googleGroupLinksByApplicationId =
+      loadPostHogGoogleGroupLinks_(emailsSheet);
 
     if (applicationIds.length === 0) {
       console.log('No Case IDs were found. Nothing was synchronized.');
@@ -455,6 +492,8 @@ function syncPostHogProjects() {
     const stats = {
       applicationIds: applicationIds.length,
       matched: 0,
+      matchedFromGoodLeap: 0,
+      matchedFromArtemisSales: 0,
       multipleMatches: 0,
       notFound: 0,
       errors: 0,
@@ -465,6 +504,9 @@ function syncPostHogProjects() {
       const attachmentLinks =
         attachmentLinksByApplicationId.get(applicationId) || [];
       const attachmentText = buildPostHogAttachmentText_(attachmentLinks);
+      const googleGroupLinks =
+        googleGroupLinksByApplicationId.get(applicationId) || [];
+      const googleGroupText = buildPostHogGoogleGroupText_(googleGroupLinks);
       const validationError = invalidIdErrors.get(applicationId) || '';
       const queryError = queryErrorsByApplicationId.get(applicationId) || '';
       const error = validationError || queryError;
@@ -476,6 +518,7 @@ function syncPostHogProjects() {
           previous ? previous.projectId : '',
           previous ? previous.projectUrl : '',
           attachmentText,
+          googleGroupText,
           previous ? previous.sourceUpdatedAt : '',
           syncedAt,
           'Error',
@@ -493,6 +536,7 @@ function syncPostHogProjects() {
           '',
           '',
           attachmentText,
+          googleGroupText,
           '',
           syncedAt,
           'Not Found',
@@ -503,11 +547,17 @@ function syncPostHogProjects() {
 
       if (matches.length === 1) {
         stats.matched += 1;
+        if (matches[0].lookupSource === 'Artemis Sales') {
+          stats.matchedFromArtemisSales += 1;
+        } else {
+          stats.matchedFromGoodLeap += 1;
+        }
         return buildPostHogOutputRow_(
           applicationId,
           matches[0].projectId,
           matches[0].projectUrl,
           attachmentText,
+          googleGroupText,
           matches[0].sourceUpdatedAt,
           syncedAt,
           'Matched',
@@ -522,6 +572,7 @@ function syncPostHogProjects() {
         matches.map((match) => match.projectId).join('\n'),
         matches.map((match) => match.projectUrl).join('\n'),
         attachmentText,
+        googleGroupText,
         matches[0].sourceUpdatedAt,
         syncedAt,
         'Multiple Matches',
@@ -535,6 +586,11 @@ function syncPostHogProjects() {
       projectsSheet,
       applicationIds,
       attachmentLinksByApplicationId,
+    );
+    applyPostHogGoogleGroupLinks_(
+      projectsSheet,
+      applicationIds,
+      googleGroupLinksByApplicationId,
     );
     SpreadsheetApp.flush();
 
@@ -697,6 +753,10 @@ function getPostHogSettings_() {
     properties.getProperty(POSTHOG_PROPERTY_KEYS.LOOKUP_TABLE) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_LOOKUP_TABLE,
   ).trim();
+  const fallbackLookupTable = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.FALLBACK_LOOKUP_TABLE) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_FALLBACK_LOOKUP_TABLE,
+  ).trim();
   const applicationIdField = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.APPLICATION_ID_FIELD) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_APPLICATION_ID_FIELD,
@@ -712,6 +772,10 @@ function getPostHogSettings_() {
   const projectUrlPrefix = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.PROJECT_URL_PREFIX) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_PROJECT_URL_PREFIX,
+  ).trim();
+  const fallbackProjectUrlPrefix = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.FALLBACK_PROJECT_URL_PREFIX) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_FALLBACK_PROJECT_URL_PREFIX,
   ).trim();
   const projectUrlSuffix = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.PROJECT_URL_SUFFIX) ||
@@ -743,9 +807,13 @@ function getPostHogSettings_() {
     );
   }
 
-  if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(lookupTable)) {
-    throw new Error('The configured PostHog lookup table is not a safe identifier.');
-  }
+  [lookupTable, fallbackLookupTable].forEach((table) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(table)) {
+      throw new Error(
+        `The configured PostHog lookup table is not a safe identifier: ${table}.`,
+      );
+    }
+  });
 
   [applicationIdField, projectIdField, sourceUpdatedAtField].forEach((field) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field)) {
@@ -753,9 +821,13 @@ function getPostHogSettings_() {
     }
   });
 
-  if (!/^https:\/\//i.test(projectUrlPrefix)) {
-    throw new Error('The PostHog project URL prefix must start with HTTPS.');
-  }
+  [projectUrlPrefix, fallbackProjectUrlPrefix].forEach((prefix) => {
+    if (!/^https:\/\//i.test(prefix)) {
+      throw new Error(
+        `The PostHog project URL prefix must start with HTTPS: ${prefix}.`,
+      );
+    }
+  });
 
   if (!/^\/[A-Za-z0-9/_-]*$/.test(projectUrlSuffix)) {
     throw new Error('The PostHog project URL suffix must be a safe URL path.');
@@ -766,10 +838,12 @@ function getPostHogSettings_() {
     projectId,
     personalApiKey,
     lookupTable,
+    fallbackLookupTable,
     applicationIdField,
     projectIdField,
     sourceUpdatedAtField,
     projectUrlPrefix,
+    fallbackProjectUrlPrefix,
     projectUrlSuffix,
   };
 }
@@ -788,22 +862,23 @@ function getOrCreatePostHogProjectsSheet_(spreadsheet) {
   sheet.setColumnWidth(2, 280);
   sheet.setColumnWidth(3, 420);
   sheet.setColumnWidth(4, 420);
-  sheet.setColumnWidth(5, 170);
+  sheet.setColumnWidth(5, 420);
   sheet.setColumnWidth(6, 170);
-  sheet.setColumnWidth(7, 150);
-  sheet.setColumnWidth(8, 100);
-  sheet.setColumnWidth(9, 420);
-  sheet.getRange('E:F').setNumberFormat('yyyy-mm-dd hh:mm:ss');
-  sheet.getRange('B:D').setWrap(true);
-  sheet.getRange('I:I').setWrap(true);
+  sheet.setColumnWidth(7, 170);
+  sheet.setColumnWidth(8, 150);
+  sheet.setColumnWidth(9, 100);
+  sheet.setColumnWidth(10, 420);
+  sheet.getRange('F:G').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sheet.getRange('B:E').setWrap(true);
+  sheet.getRange('J:J').setWrap(true);
 
   return sheet;
 }
 
 /**
- * Upgrades the original eight-column derived sheet by inserting the new
- * Attachment Links column. The exact legacy header sequence must match before
- * any structural change is made, so rerunning setup cannot insert duplicates.
+ * Upgrades either supported legacy layout to the current derived schema. The
+ * exact legacy header sequence must match before any structural change is
+ * made, so rerunning setup cannot insert duplicate columns.
  */
 function migratePostHogProjectsSheetSchema_(spreadsheet) {
   const sheet = spreadsheet.getSheetByName(POSTHOG_SYNC_CONFIG.SHEET_NAME);
@@ -813,7 +888,7 @@ function migratePostHogProjectsSheetSchema_(spreadsheet) {
   }
 
   const headerCount = Math.max(
-    LEGACY_POSTHOG_PROJECT_HEADERS.length,
+    LEGACY_POSTHOG_PROJECT_HEADERS_V2.length,
     Math.min(sheet.getLastColumn(), POSTHOG_PROJECT_HEADERS.length),
   );
   const existingHeaders = sheet
@@ -827,24 +902,43 @@ function migratePostHogProjectsSheetSchema_(spreadsheet) {
     return;
   }
 
-  const isLegacy = LEGACY_POSTHOG_PROJECT_HEADERS.every(
+  const isLegacyV2 = LEGACY_POSTHOG_PROJECT_HEADERS_V2.every(
     (header, index) => existingHeaders[index] === header,
   );
 
-  if (!isLegacy) {
+  if (isLegacyV2) {
+    sheet.insertColumnBefore(5);
+    formatPostHogHeaderCell_(sheet.getRange(1, 5), 'Google Group URL');
+    console.log(
+      'PostHog Projects schema upgraded: Google Group URL was inserted as column E.',
+    );
+    return;
+  }
+
+  const isLegacyV1 = LEGACY_POSTHOG_PROJECT_HEADERS_V1.every(
+    (header, index) => existingHeaders[index] === header,
+  );
+
+  if (!isLegacyV1) {
     return;
   }
 
   sheet.insertColumnBefore(4);
-  sheet
-    .getRange(1, 4)
-    .setValue(POSTHOG_PROJECT_HEADERS[3])
+  formatPostHogHeaderCell_(sheet.getRange(1, 4), 'Attachment Links');
+  sheet.insertColumnBefore(5);
+  formatPostHogHeaderCell_(sheet.getRange(1, 5), 'Google Group URL');
+  console.log(
+    'PostHog Projects schema upgraded: Attachment Links and Google Group URL ' +
+    'were inserted as columns D and E.',
+  );
+}
+
+function formatPostHogHeaderCell_(range, value) {
+  range
+    .setValue(value)
     .setFontWeight('bold')
     .setBackground('#6e04bd')
     .setFontColor('#ffffff');
-  console.log(
-    'PostHog Projects schema upgraded: Attachment Links was inserted as column D.',
-  );
 }
 
 function loadUniquePostHogApplicationIds_(emailsSheet) {
@@ -969,12 +1063,145 @@ function loadPostHogAttachmentLinks_(attachmentsSheet) {
   return linksByApplicationId;
 }
 
+/**
+ * Groups Google Groups URLs from Emails by Case ID. Exact conversation URLs
+ * take precedence over search fallbacks. Duplicate URLs are removed.
+ */
+function loadPostHogGoogleGroupLinks_(emailsSheet) {
+  if (!emailsSheet) {
+    throw new Error(
+      `Required sheet not found: ${POSTHOG_SYNC_CONFIG.SOURCE_SHEET_NAME}.`,
+    );
+  }
+
+  if (emailsSheet.getLastRow() < 2) {
+    return new Map();
+  }
+
+  const headers = emailsSheet
+    .getRange(1, 1, 1, emailsSheet.getLastColumn())
+    .getDisplayValues()[0];
+  const applicationIdIndex = headers.indexOf(
+    POSTHOG_SYNC_CONFIG.SOURCE_APPLICATION_ID_HEADER,
+  );
+  const groupUrlIndex = headers.indexOf(
+    POSTHOG_SYNC_CONFIG.SOURCE_GOOGLE_GROUP_URL_HEADER,
+  );
+
+  if (applicationIdIndex < 0 || groupUrlIndex < 0) {
+    throw new Error(
+      'The Emails sheet is missing one or more required headers: ' +
+      `${POSTHOG_SYNC_CONFIG.SOURCE_APPLICATION_ID_HEADER}, ` +
+      `${POSTHOG_SYNC_CONFIG.SOURCE_GOOGLE_GROUP_URL_HEADER}.`,
+    );
+  }
+
+  const values = emailsSheet
+    .getRange(
+      2,
+      1,
+      emailsSheet.getLastRow() - 1,
+      emailsSheet.getLastColumn(),
+    )
+    .getDisplayValues();
+  const exactUrlsByApplicationId = new Map();
+  const fallbackUrlsByApplicationId = new Map();
+
+  values.forEach((row) => {
+    const applicationId = String(row[applicationIdIndex] || '').trim();
+    const url = String(row[groupUrlIndex] || '').trim();
+
+    if (
+      !applicationId ||
+      applicationId === 'NO_CASE_ID' ||
+      !/^https:\/\//i.test(url)
+    ) {
+      return;
+    }
+
+    const targetMap = isExactPostHogGoogleGroupUrl_(url)
+      ? exactUrlsByApplicationId
+      : fallbackUrlsByApplicationId;
+    if (!targetMap.has(applicationId)) {
+      targetMap.set(applicationId, new Set());
+    }
+    targetMap.get(applicationId).add(url);
+  });
+
+  const linksByApplicationId = new Map();
+  const applicationIds = new Set(
+    Array.from(exactUrlsByApplicationId.keys()).concat(
+      Array.from(fallbackUrlsByApplicationId.keys()),
+    ),
+  );
+
+  applicationIds.forEach((applicationId) => {
+    const exactUrls = exactUrlsByApplicationId.get(applicationId);
+    const selectedUrls = exactUrls && exactUrls.size > 0
+      ? exactUrls
+      : fallbackUrlsByApplicationId.get(applicationId) || new Set();
+    linksByApplicationId.set(
+      applicationId,
+      Array.from(selectedUrls).map((url) => ({url})),
+    );
+  });
+
+  return linksByApplicationId;
+}
+
+function isExactPostHogGoogleGroupUrl_(url) {
+  return /\/c\/[A-Za-z0-9_-]+(?:[/?#]|$)/i.test(String(url || ''));
+}
+
 function fetchPostHogProjectMatches_(applicationIds) {
   if (applicationIds.length === 0) {
     return [];
   }
 
   const settings = getPostHogSettings_();
+  const primaryMatches = fetchPostHogProjectMatchesFromTable_(
+    applicationIds,
+    settings.lookupTable,
+    'GoodLeap',
+    'goodleap_apps_script_project_lookup',
+    settings.projectUrlPrefix,
+    settings,
+  );
+  const primaryMatchesByApplicationId = groupPostHogMatches_(primaryMatches);
+  const fallbackApplicationIds = applicationIds.filter(
+    (applicationId) =>
+      (primaryMatchesByApplicationId.get(applicationId) || []).length === 0,
+  );
+
+  if (fallbackApplicationIds.length === 0) {
+    return primaryMatches;
+  }
+
+  const fallbackMatches = fetchPostHogProjectMatchesFromTable_(
+    fallbackApplicationIds,
+    settings.fallbackLookupTable,
+    'Artemis Sales',
+    'artemis_sales_apps_script_project_lookup',
+    settings.fallbackProjectUrlPrefix,
+    settings,
+  );
+
+  return primaryMatches.concat(fallbackMatches);
+}
+
+/**
+ * Queries one confirmed financier table. The caller sends only IDs that have
+ * not matched a higher-priority source, so GoodLeap always wins and Artemis
+ * Sales is used strictly as a fallback.
+ */
+function fetchPostHogProjectMatchesFromTable_(
+  applicationIds,
+  lookupTable,
+  lookupSource,
+  queryName,
+  projectUrlPrefix,
+  settings,
+) {
   const literals = applicationIds
     .map((applicationId) => postHogStringLiteral_(applicationId))
     .join(', ');
@@ -986,12 +1213,12 @@ function fetchPostHogProjectMatches_(applicationIds) {
     'SELECT',
     `  toString(f.${settings.applicationIdField}) AS application_id,`,
     `  toString(f.${settings.projectIdField}) AS project_id,`,
-    `  concat(${postHogStringLiteral_(settings.projectUrlPrefix)}, ` +
+    `  concat(${postHogStringLiteral_(projectUrlPrefix)}, ` +
       `toString(f.${settings.projectIdField}), ` +
       `${postHogStringLiteral_(settings.projectUrlSuffix)}) ` +
       'AS project_url,',
     `  f.${settings.sourceUpdatedAtField} AS source_updated_at`,
-    `FROM ${settings.lookupTable} AS f`,
+    `FROM ${lookupTable} AS f`,
     `WHERE toString(f.${settings.applicationIdField}) IN (${literals})`,
     `ORDER BY toString(f.${settings.applicationIdField}), ` +
       `f.${settings.sourceUpdatedAtField} DESC, ` +
@@ -1001,10 +1228,13 @@ function fetchPostHogProjectMatches_(applicationIds) {
 
   const response = executePostHogHogQL_(
     query,
-    'goodleap_apps_script_project_lookup',
+    queryName,
   );
 
-  return parsePostHogProjectMatches_(response);
+  return parsePostHogProjectMatches_(response).map((match) => ({
+    ...match,
+    lookupSource,
+  }));
 }
 
 function executePostHogHogQL_(query, queryName) {
@@ -1159,8 +1389,8 @@ function loadExistingPostHogProjectRows_(sheet) {
     rowsByApplicationId.set(applicationId, {
       projectId: row[1],
       projectUrl: row[2],
-      sourceUpdatedAt: row[4],
-      matchCount: Number(row[7]) || 0,
+      sourceUpdatedAt: row[5],
+      matchCount: Number(row[8]) || 0,
     });
   });
 
@@ -1172,6 +1402,7 @@ function buildPostHogOutputRow_(
   projectId,
   projectUrl,
   attachmentText,
+  googleGroupText,
   sourceUpdatedAt,
   syncedAt,
   status,
@@ -1183,6 +1414,7 @@ function buildPostHogOutputRow_(
     projectId,
     projectUrl,
     attachmentText,
+    googleGroupText,
     sourceUpdatedAt,
     syncedAt,
     status,
@@ -1200,6 +1432,10 @@ function sanitizePostHogAttachmentLabel_(value, fallbackIndex) {
 
 function buildPostHogAttachmentText_(links) {
   return links.map((link) => link.filename).join('\n');
+}
+
+function buildPostHogGoogleGroupText_(links) {
+  return links.map((link) => link.url).join('\n');
 }
 
 /**
@@ -1232,6 +1468,40 @@ function applyPostHogAttachmentLinks_(
 
   sheet
     .getRange(2, 4, richTextRows.length, 1)
+    .setRichTextValues(richTextRows)
+    .setWrap(true);
+}
+
+/**
+ * Converts the Google Groups display text in column E into per-URL rich-text
+ * hyperlinks. Multiple exact conversations remain independently clickable.
+ */
+function applyPostHogGoogleGroupLinks_(
+  sheet,
+  applicationIds,
+  linksByApplicationId,
+) {
+  if (applicationIds.length === 0) {
+    return;
+  }
+
+  const richTextRows = applicationIds.map((applicationId) => {
+    const links = linksByApplicationId.get(applicationId) || [];
+    const text = buildPostHogGoogleGroupText_(links);
+    const builder = SpreadsheetApp.newRichTextValue().setText(text);
+    let startOffset = 0;
+
+    links.forEach((link, index) => {
+      const endOffset = startOffset + link.url.length;
+      builder.setLinkUrl(startOffset, endOffset, link.url);
+      startOffset = endOffset + (index < links.length - 1 ? 1 : 0);
+    });
+
+    return [builder.build()];
+  });
+
+  sheet
+    .getRange(2, 5, richTextRows.length, 1)
     .setRichTextValues(richTextRows)
     .setWrap(true);
 }

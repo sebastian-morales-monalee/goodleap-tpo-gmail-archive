@@ -648,6 +648,9 @@ function processManualForwardedMessage_(
 
   const gmailUrl =
     `https://mail.google.com/mail/u/0/#all/${messageId}`;
+  const googleGroupUrl =
+    extractGoogleGroupConversationUrl_(message) ||
+    buildGoogleGroupSearchUrl_(caseId);
 
   appendSafeRow_(emailsSheet, [
     processedAt,
@@ -669,6 +672,7 @@ function processManualForwardedMessage_(
     messageId,
     threadId,
     gmailUrl,
+    googleGroupUrl,
     'Processed - Manual Backfill',
     '',
   ]);

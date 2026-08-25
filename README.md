@@ -66,6 +66,8 @@ It:
 - Saves attachments when present and, when enabled, a plain-text copy of the
   email body.
 - Maintains the `Emails`, `Attachments`, and `Errors` sheets.
+- Stores both the personal Gmail message URL and the canonical Google Groups
+  conversation URL when Google includes that conversation link in the message.
 - Deduplicates Gmail messages by Gmail Message ID.
 - Deduplicates attachments by message, attachment index, and SHA-1 hash.
 - Can install the initial Gmail-only five-minute trigger before PostHog is
@@ -79,6 +81,8 @@ Primary functions:
 4. `processRecentGoodLeapEmails()`
 5. `installGoodLeapTrigger()`
 6. `removeGoodLeapTrigger()`
+7. `previewGoogleGroupUrls()`
+8. `backfillGoogleGroupUrls()`
 
 ### `ManualBackfill.gs`
 
@@ -111,11 +115,15 @@ It:
 - Reads unique Case IDs from the `Emails` sheet.
 - Treats each Case ID as a candidate GoodLeap Financier Application ID.
 - Queries PostHog through the private HogQL query API.
+- Queries `goodleap_postgres_financiers` first and sends only unmatched
+  Application IDs to the `artemis_sales_postgres_financiers` fallback.
 - Looks up the Artemis Sales Project ID.
 - Constructs the Artemis project URL.
 - Creates and maintains the `PostHog Projects` sheet automatically.
 - Adds every saved Drive attachment to `PostHog Projects` as a clickable
   filename, with multiple files displayed on separate lines.
+- Copies the exact or fallback Google Groups URL from `Emails` into the same
+  operational project row.
 - Preserves the previous matched value if a temporary API error occurs.
 - Reports `Matched`, `Not Found`, `Multiple Matches`, or `Error` explicitly.
 - Looks up new Application IDs immediately after new mail is archived.
@@ -128,13 +136,16 @@ The default warehouse mapping is:
 | --- | --- |
 | Financier Application ID | `goodleap_postgres_financiers.application_id` |
 | Artemis Sales Project ID | `goodleap_postgres_financiers.project_id` |
-| Project URL | `https://goodleap.artemis.solar/projects/{id}/proposal` |
+| Fallback Application ID | `artemis_sales_postgres_financiers.application_id` |
+| Fallback Project ID | `artemis_sales_postgres_financiers.project_id` |
+| GoodLeap Project URL | `https://goodleap.artemis.solar/projects/{id}/proposal` |
+| Artemis Sales Project URL | `https://sales.artemis.solar/projects/{id}/proposal` |
 
-The table and fields were confirmed through PostHog's metadata-only
-`DatabaseSchemaQuery`. The GoodLeap URL shape is consistent with existing
-project records in this repository. The returned row values must still be
-confirmed with `previewPostHogProjectMatches()` before the automated trigger is
-installed.
+The tables and fields were confirmed through read-only PostHog schema
+inspection and targeted HogQL verification. The GoodLeap URL shape is
+consistent with existing project records in this repository. The returned row
+values must still be confirmed with `previewPostHogProjectMatches()` before the
+automated trigger is installed.
 
 Primary functions:
 
@@ -195,10 +206,12 @@ Optional properties:
 | Property | Default | Purpose |
 | --- | --- | --- |
 | `POSTHOG_GOODLEAP_LOOKUP_TABLE` | `goodleap_postgres_financiers` | Warehouse lookup table |
+| `POSTHOG_ARTEMIS_SALES_LOOKUP_TABLE` | `artemis_sales_postgres_financiers` | Fallback warehouse lookup table |
 | `POSTHOG_APPLICATION_ID_FIELD` | `application_id` | Financier Application ID field |
 | `POSTHOG_GOODLEAP_PROJECT_ID_FIELD` | `project_id` | Artemis Project ID field |
 | `POSTHOG_SOURCE_UPDATED_AT_FIELD` | `updated_at` | Source freshness field |
 | `POSTHOG_PROJECT_URL_PREFIX` | `https://goodleap.artemis.solar/projects/` | URL prefix |
+| `POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX` | `https://sales.artemis.solar/projects/` | Sales fallback URL prefix |
 | `POSTHOG_PROJECT_URL_SUFFIX` | `/proposal` | URL suffix |
 
 Existing properties whose names start with `GOODLEAP_` are managed by
@@ -359,6 +372,7 @@ Its managed columns are:
 | `Project ID` | Artemis project identifier returned by PostHog |
 | `Project URL` | Direct Artemis proposal URL |
 | `Attachment Links` | Clickable Drive filenames read from `Attachments` |
+| `Google Group URL` | Exact conversation or Case-ID search link read from `Emails` |
 | `Source Updated At` | PostHog warehouse update time |
 | `Last Synced At` | Most recent reconciliation time |
 | `Match Status` | `Matched`, `Not Found`, `Multiple Matches`, or `Error` |
@@ -370,6 +384,10 @@ Attachment links are matched by `Attachments.Case ID` to
 can show attachments even when its PostHog status is `Not Found`. Drive access
 continues to follow the file and folder permissions already configured in
 Google Drive.
+
+Google Groups links are matched by `Emails.Case ID` to the same Application
+ID. Duplicate URLs are suppressed. Exact `/c/{token}` conversation URLs take
+precedence; when no exact URL exists, the Case-ID search fallback is displayed.
 
 ### 6. Enable the hybrid schedule
 
@@ -416,19 +434,94 @@ unrelated triggers untouched.
 
 ### Adding Attachment Links to an existing installation
 
-For an installation that already has `PostHog Projects` with the original
+For an installation that still has `PostHog Projects` with the original
 eight-column layout:
 
 1. Replace only `PostHogSync.gs` with the updated repository version and save.
 2. Run `setupPostHogProjectSync()` once. It detects the exact legacy header
-   sequence and inserts `Attachment Links` as column D automatically.
-3. Run `syncPostHogProjects()` once to populate historical attachment links.
+   sequence and inserts `Attachment Links` as column D and `Google Group URL`
+   as column E automatically.
+3. Run `syncPostHogProjects()` once to populate both historical link columns.
 4. Verify at least one row with a single file and one with multiple files.
 5. Confirm that the existing five-minute and hourly triggers remain present.
 
 Do not insert the column manually and do not reinstall the triggers. The setup
 function is idempotent: after migration, later executions validate the current
-nine-column structure without adding another column.
+ten-column structure without adding another column.
+
+### Adding Google Group URLs to an existing installation
+
+The `Emails` sheet includes two separate links:
+
+- `Gmail URL` opens the message in the operating account's Gmail mailbox.
+- `Google Group URL` opens either the canonical conversation or a search scoped
+  to the Case ID within the GoodLeap Google Group.
+
+The Google Groups conversation token is generated by Google and cannot be
+derived from the Case ID. `Code.gs` first extracts it from `List-Archive` or
+from a matching conversation link in the email content. When Google did not
+preserve that link, it uses this deterministic fallback:
+
+`https://groups.google.com/a/artemispower.com/g/goodleap-tpo/search?q={Case ID}`
+
+The fallback opens the group already filtered to the relevant Application ID.
+If Google later supplies an exact `/c/{token}` link, rerunning the backfill
+upgrades the fallback without overwriting existing exact URLs.
+
+To upgrade an existing installation:
+
+1. Replace `Code.gs` and `ManualBackfill.gs` with the updated versions and save.
+2. Run `setupGoodLeapArchive()` once. It detects the original `Emails` schema
+   and inserts `Google Group URL` directly after `Gmail URL`.
+3. Run `previewGoogleGroupUrls()` and review `[EXACT]` and `[FALLBACK]` results.
+   This function does not update existing rows.
+4. Run `backfillGoogleGroupUrls()` once to populate the new column from each
+   row's stored Gmail Message ID.
+5. Review every `[NOT FOUND]` result. Valid Case IDs should normally receive at
+   least a fallback search URL.
+
+Both setup and backfill are idempotent. Existing values are preserved, rows
+are not duplicated, and the installed triggers do not need to be recreated.
+Future emails receive `Google Group URL` during normal processing.
+
+### Adding Google Group URL to an existing PostHog Projects sheet
+
+For an installation that already has the nine-column `PostHog Projects` layout
+with `Attachment Links`:
+
+1. Replace only `PostHogSync.gs` with the updated version and save.
+2. Run `setupPostHogProjectSync()` once. It inserts `Google Group URL` as
+   column E and shifts the timestamp/status columns safely.
+3. Run `syncPostHogProjects()` once to populate historical group links from
+   `Emails`.
+4. Verify one exact or fallback link and confirm the remaining data columns are
+   still aligned.
+
+Do not insert the column manually and do not reinstall the triggers. The
+five-minute coordinator and hourly reconciliation use the updated sync
+automatically.
+
+### Enabling the Artemis Sales fallback in an existing installation
+
+The fallback is implemented entirely in `PostHogSync.gs`; it does not add a
+Sheet column or require a new trigger.
+
+1. Replace `PostHogSync.gs` with the current repository version and save it.
+2. Run `setupPostHogProjectSync()` once. Confirm that the execution log lists
+   `artemis_sales_postgres_financiers` as the Artemis Sales fallback table.
+3. Run `previewPostHogProjectMatches()`. A fallback result ends with
+   `Artemis Sales` in the `[MATCH]` log line.
+4. Run `syncPostHogProjects()` once to refresh historical `Not Found` rows.
+5. Confirm that a known Sales-only Application ID changes from `Not Found` to
+   `Matched`, uses `https://sales.artemis.solar/projects/{id}/proposal`, and
+   opens successfully.
+
+No Script Property is required for the confirmed default table. Add
+`POSTHOG_ARTEMIS_SALES_LOOKUP_TABLE` only when a deployment needs to override
+that table name. The Sales URL prefix also defaults automatically; use
+`POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX` only when a deployment needs a
+different Sales origin. Do not reinstall the triggers: the existing
+five-minute and hourly handlers automatically execute the updated lookup logic.
 
 To remove only the hourly fallback, run:
 
@@ -446,6 +539,8 @@ stop all PostHog calls while keeping Gmail automation, run
   Gmail messages.
 - New message metadata and any available attachments are archived in Drive and
   Sheets. Messages with a valid Case ID are retained even with zero attachments.
+- Each new `Emails` row receives its exact Google Groups conversation URL when
+  that link is available in the source message.
 - When new messages were archived, `PostHogSync.gs` immediately refreshes the
   derived project lookup and its Drive attachment links.
 - Every hour, `PostHogSync.gs` performs the same reconciliation as a fallback.
@@ -469,8 +564,10 @@ The deployment is ready only when all of the following are true:
 - There are no unresolved rows marked `Error` or unexplained
   `Multiple Matches` in `PostHog Projects`.
 
-`Not Found` is allowed when the Application ID has not yet reached PostHog; the
-hourly reconciliation will retry it.
+`Not Found` means the Application ID was absent from both the GoodLeap and
+Artemis Sales financier tables at query time. The hourly reconciliation retries
+it. Apps Script may run more frequently than the warehouse source refresh, so a
+new source record can remain temporarily unavailable in PostHog.
 
 ## Replication in another account
 
@@ -509,9 +606,24 @@ created by setup functions. They do not need to be created manually.
   and joins.
 - Confirm that `goodleap_postgres_financiers.application_id` represents the
   Case ID format found in `Emails`.
+- Confirm that `artemis_sales_postgres_financiers.application_id` contains the
+  expected Sales Artemis fallback records.
 - If the warehouse mapping changes, update the optional lookup table or field
   Script Properties and rerun the preview.
 - Do not install the PostHog trigger until at least one known project matches.
+
+### A project exists only in Artemis Sales
+
+No manual action is required. The lookup checks GoodLeap first. Only IDs with
+zero GoodLeap matches are queried in `artemis_sales_postgres_financiers`. A
+Sales match populates the same Project ID and Project URL columns and reports
+`Matched`. GoodLeap matches use `goodleap.artemis.solar`; fallback matches use
+`sales.artemis.solar`. If both sources return zero rows, the status remains
+`Not Found`.
+
+PostHog currently refreshes these warehouse tables on its own source schedule.
+The five-minute Apps Script trigger cannot expose a source row before PostHog
+has synchronized it; the hourly reconciliation retries delayed records.
 
 ### `Multiple Matches`
 

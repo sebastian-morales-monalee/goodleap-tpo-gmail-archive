@@ -35,6 +35,14 @@ const CONFIG = {
   BACKFILL_MAX_THREADS: 500,
   RECENT_MAX_THREADS: 100,
   RECENT_DAYS: 30,
+  GROUP_URL_PREVIEW_MAX_ROWS: 50,
+  GROUP_URL_BACKFILL_MAX_ROWS: 5000,
+
+  // Exact conversation URLs use this prefix followed by Google's opaque
+  // conversation token. The token is extracted from message metadata/body;
+  // it cannot be derived from the GoodLeap Case ID.
+  GROUP_CONVERSATION_URL_PREFIX:
+    'https://groups.google.com/a/artemispower.com/g/goodleap-tpo/c/',
 
   // Sheets supports up to 50,000 characters per cell. The complete body is
   // also saved as a TXT file in Drive.
@@ -52,9 +60,34 @@ const PROPERTY_KEYS = {
   FORMAT_VERSION: 'GOODLEAP_FORMAT_VERSION',
 };
 
-const CURRENT_FORMAT_VERSION = '1';
+const CURRENT_FORMAT_VERSION = '2';
 
 const EMAIL_HEADERS = [
+  'Processed At',
+  'Received At',
+  'Case ID',
+  'Update Type',
+  'From',
+  'To',
+  'Cc',
+  'Subject',
+  'Proposed Production kWh',
+  'GoodLeap Benchmark kWh',
+  'Tolerance %',
+  'Email Body',
+  'Body TXT URL',
+  'Drive Folder URL',
+  'Attachment Count',
+  'Attachment URLs',
+  'Gmail Message ID',
+  'Gmail Thread ID',
+  'Gmail URL',
+  'Google Group URL',
+  'Status',
+  'Error',
+];
+
+const LEGACY_EMAIL_HEADERS_V1 = [
   'Processed At',
   'Received At',
   'Case ID',
@@ -199,6 +232,214 @@ function previewGoodLeapMatches() {
     messagesWithoutAttachments,
     messagesIgnoredWithoutCaseId,
   };
+}
+
+/**
+ * Reads a limited sample of archived Gmail messages and reports whether an
+ * exact conversation URL or a Case-ID search fallback will be used. It does
+ * not update existing email rows.
+ */
+function previewGoogleGroupUrls() {
+  const resources = getOrCreateResources_();
+  const sheet = resources.spreadsheet.getSheetByName('Emails');
+  const rowCount = Math.max(sheet.getLastRow() - 1, 0);
+
+  if (rowCount === 0) {
+    console.log('No archived email rows were found. Nothing was previewed.');
+    return {
+      rowsPreviewed: 0,
+      exact: 0,
+      fallback: 0,
+      existing: 0,
+      notFound: 0,
+      errors: 0,
+    };
+  }
+
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getDisplayValues()[0];
+  const caseIdIndex = requireSheetHeaderIndex_(headers, 'Case ID', 'Emails');
+  const messageIdIndex = requireSheetHeaderIndex_(
+    headers,
+    'Gmail Message ID',
+    'Emails',
+  );
+  const groupUrlIndex = requireSheetHeaderIndex_(
+    headers,
+    'Google Group URL',
+    'Emails',
+  );
+  const rowsToPreview = Math.min(
+    rowCount,
+    CONFIG.GROUP_URL_PREVIEW_MAX_ROWS,
+  );
+  const values = sheet
+    .getRange(2, 1, rowsToPreview, sheet.getLastColumn())
+    .getDisplayValues();
+  const stats = {
+    rowsPreviewed: rowsToPreview,
+    exact: 0,
+    fallback: 0,
+    existing: 0,
+    notFound: 0,
+    errors: 0,
+  };
+
+  values.forEach((row) => {
+    const caseId = String(row[caseIdIndex] || '').trim();
+    const messageId = String(row[messageIdIndex] || '').trim();
+    const existingUrl = String(row[groupUrlIndex] || '').trim();
+
+    if (existingUrl) {
+      stats.existing += 1;
+      console.log(`[EXISTING] ${caseId} | ${existingUrl}`);
+      return;
+    }
+
+    try {
+      const message = messageId ? GmailApp.getMessageById(messageId) : null;
+      const exactUrl = message
+        ? extractGoogleGroupConversationUrl_(message)
+        : '';
+      const fallbackUrl = buildGoogleGroupSearchUrl_(caseId);
+
+      if (exactUrl) {
+        stats.exact += 1;
+        console.log(`[EXACT] ${caseId} | ${exactUrl}`);
+      } else if (fallbackUrl) {
+        stats.fallback += 1;
+        console.log(`[FALLBACK] ${caseId} | ${fallbackUrl}`);
+      } else {
+        stats.notFound += 1;
+        console.log(`[NOT FOUND] ${caseId}`);
+      }
+    } catch (error) {
+      stats.errors += 1;
+      console.error(`[ERROR] ${caseId} | ${truncateForCell_(String(error))}`);
+    }
+  });
+
+  console.log(JSON.stringify(stats, null, 2));
+  return stats;
+}
+
+/**
+ * Populates Google Group URL for existing Emails rows by reopening each Gmail
+ * message through its stored Gmail Message ID. Exact conversation URLs take
+ * precedence; otherwise, a stable group search URL is generated from Case ID.
+ * Existing exact URLs are preserved, and fallbacks can later be upgraded.
+ */
+function backfillGoogleGroupUrls() {
+  const lock = LockService.getScriptLock();
+
+  if (!lock.tryLock(10000)) {
+    console.log('Another execution is already running. The backfill was skipped.');
+    return {skippedBecauseLocked: true};
+  }
+
+  try {
+    const resources = getOrCreateResources_();
+    const sheet = resources.spreadsheet.getSheetByName('Emails');
+    const rowCount = Math.max(sheet.getLastRow() - 1, 0);
+
+    if (rowCount === 0) {
+      console.log('No archived email rows were found. Nothing was backfilled.');
+      return {
+        rows: 0,
+        exactUpdated: 0,
+        fallbackUpdated: 0,
+        existingExact: 0,
+        existingFallback: 0,
+        notFound: 0,
+        errors: 0,
+      };
+    }
+
+    if (rowCount > CONFIG.GROUP_URL_BACKFILL_MAX_ROWS) {
+      throw new Error(
+        `The backfill found ${rowCount} rows, exceeding the safety limit of ` +
+        `${CONFIG.GROUP_URL_BACKFILL_MAX_ROWS}.`,
+      );
+    }
+
+    const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getDisplayValues()[0];
+    const caseIdIndex = requireSheetHeaderIndex_(headers, 'Case ID', 'Emails');
+    const messageIdIndex = requireSheetHeaderIndex_(
+      headers,
+      'Gmail Message ID',
+      'Emails',
+    );
+    const groupUrlIndex = requireSheetHeaderIndex_(
+      headers,
+      'Google Group URL',
+      'Emails',
+    );
+    const values = sheet
+      .getRange(2, 1, rowCount, sheet.getLastColumn())
+      .getDisplayValues();
+    const output = values.map((row) => [String(row[groupUrlIndex] || '').trim()]);
+    const stats = {
+      rows: rowCount,
+      exactUpdated: 0,
+      fallbackUpdated: 0,
+      existingExact: 0,
+      existingFallback: 0,
+      notFound: 0,
+      errors: 0,
+    };
+
+    values.forEach((row, index) => {
+      const caseId = String(row[caseIdIndex] || '').trim();
+      const messageId = String(row[messageIdIndex] || '').trim();
+
+      const existingUrl = output[index][0];
+      if (isExactGoogleGroupConversationUrl_(existingUrl)) {
+        stats.existingExact += 1;
+        return;
+      }
+
+      try {
+        const message = messageId ? GmailApp.getMessageById(messageId) : null;
+        const exactUrl = message
+          ? extractGoogleGroupConversationUrl_(message)
+          : '';
+        const fallbackUrl = buildGoogleGroupSearchUrl_(caseId);
+
+        if (exactUrl) {
+          output[index][0] = exactUrl;
+          stats.exactUpdated += 1;
+          console.log(`[EXACT] ${caseId} | ${exactUrl}`);
+        } else if (existingUrl) {
+          stats.existingFallback += 1;
+        } else if (fallbackUrl) {
+          output[index][0] = fallbackUrl;
+          stats.fallbackUpdated += 1;
+          console.log(`[FALLBACK] ${caseId} | ${fallbackUrl}`);
+        } else {
+          stats.notFound += 1;
+          console.log(`[NOT FOUND] ${caseId}`);
+        }
+      } catch (error) {
+        stats.errors += 1;
+        console.error(`[ERROR] ${caseId} | ${truncateForCell_(String(error))}`);
+      }
+    });
+
+    sheet
+      .getRange(2, groupUrlIndex + 1, rowCount, 1)
+      .setValues(output)
+      .setWrap(true);
+    SpreadsheetApp.flush();
+
+    console.log(JSON.stringify(stats, null, 2));
+    console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
+    return stats;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**
@@ -447,6 +688,9 @@ function processMessage_(
   });
 
   const gmailUrl = `https://mail.google.com/mail/u/0/#all/${messageId}`;
+  const googleGroupUrl =
+    extractGoogleGroupConversationUrl_(message) ||
+    buildGoogleGroupSearchUrl_(extracted.caseId);
 
   appendSafeRow_(emailsSheet, [
     processedAt,
@@ -468,6 +712,7 @@ function processMessage_(
     messageId,
     threadId,
     gmailUrl,
+    googleGroupUrl,
     'Processed',
     '',
   ]);
@@ -512,6 +757,7 @@ function getOrCreateResources_() {
     properties.deleteProperty(PROPERTY_KEYS.FORMAT_VERSION);
   }
 
+  migrateEmailsSheetSchema_(spreadsheet);
   const emailsSheet = getOrCreateSheet_(spreadsheet, 'Emails', EMAIL_HEADERS);
   const attachmentsSheet = getOrCreateSheet_(
     spreadsheet,
@@ -527,6 +773,54 @@ function getOrCreateResources_() {
   }
 
   return {rootFolder, spreadsheet};
+}
+
+/**
+ * Upgrades the original Emails layout by inserting Google Group URL directly
+ * after Gmail URL. The exact legacy header sequence must match before the
+ * structural change is made, making the migration safe to rerun.
+ */
+function migrateEmailsSheetSchema_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName('Emails');
+
+  if (!sheet || sheet.getLastRow() === 0) {
+    return;
+  }
+
+  const headerCount = Math.max(
+    LEGACY_EMAIL_HEADERS_V1.length,
+    Math.min(sheet.getLastColumn(), EMAIL_HEADERS.length),
+  );
+  const existingHeaders = sheet
+    .getRange(1, 1, 1, headerCount)
+    .getDisplayValues()[0];
+  const alreadyCurrent = EMAIL_HEADERS.every(
+    (header, index) => existingHeaders[index] === header,
+  );
+
+  if (alreadyCurrent) {
+    return;
+  }
+
+  const isLegacyV1 = LEGACY_EMAIL_HEADERS_V1.every(
+    (header, index) => existingHeaders[index] === header,
+  );
+
+  if (!isLegacyV1) {
+    return;
+  }
+
+  const googleGroupUrlColumn = EMAIL_HEADERS.indexOf('Google Group URL') + 1;
+  sheet.insertColumnBefore(googleGroupUrlColumn);
+  sheet
+    .getRange(1, googleGroupUrlColumn)
+    .setValue('Google Group URL')
+    .setFontWeight('bold')
+    .setBackground('#6e04bd')
+    .setFontColor('#ffffff');
+  console.log(
+    'Emails schema upgraded: Google Group URL was inserted after Gmail URL.',
+  );
 }
 
 function getOrCreateSheet_(spreadsheet, name, headers) {
@@ -566,6 +860,8 @@ function formatArchiveSheets_(emailsSheet, attachmentsSheet) {
   emailsSheet.setColumnWidth(8, 420);
   emailsSheet.setColumnWidth(12, 500);
   emailsSheet.setColumnWidth(16, 300);
+  emailsSheet.setColumnWidth(20, 420);
+  emailsSheet.getRange('T:T').setWrap(true);
 
   attachmentsSheet.getRange('A:B').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   attachmentsSheet.setColumnWidth(6, 260);
@@ -656,6 +952,57 @@ function extractGoodLeapFields_(subject, body) {
       /Tolerance\s*:\s*([+-]?[\d,.]+)/i,
     ),
   };
+}
+
+/**
+ * Extracts the canonical Google Groups conversation URL from message metadata
+ * or content. Google generates an opaque conversation token, so no URL is
+ * invented when that token is unavailable.
+ */
+function extractGoogleGroupConversationUrl_(message) {
+  const prefix = CONFIG.GROUP_CONVERSATION_URL_PREFIX;
+  const pattern = new RegExp(
+    `${escapeRegexText_(prefix)}[A-Za-z0-9_-]+`,
+    'i',
+  );
+  const sources = [
+    message.getHeader('List-Archive') || '',
+    message.getBody() || '',
+    message.getPlainBody() || '',
+  ];
+
+  for (let index = 0; index < sources.length; index += 1) {
+    const match = String(sources[index]).match(pattern);
+    if (match) {
+      return match[0];
+    }
+  }
+
+  return '';
+}
+
+function buildGoogleGroupSearchUrl_(caseId) {
+  if (!isValidGoodLeapCaseId_(caseId)) {
+    return '';
+  }
+  const groupBaseUrl = CONFIG.GROUP_CONVERSATION_URL_PREFIX.replace(/\/c\/$/, '');
+  return `${groupBaseUrl}/search?q=${encodeURIComponent(caseId)}`;
+}
+
+function isExactGoogleGroupConversationUrl_(url) {
+  return String(url || '').startsWith(CONFIG.GROUP_CONVERSATION_URL_PREFIX);
+}
+
+function escapeRegexText_(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function requireSheetHeaderIndex_(headers, header, sheetName) {
+  const index = headers.indexOf(header);
+  if (index < 0) {
+    throw new Error(`Header not found in ${sheetName}: ${header}.`);
+  }
+  return index;
 }
 
 function isValidGoodLeapCaseId_(caseId) {
