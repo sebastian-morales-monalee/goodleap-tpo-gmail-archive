@@ -253,6 +253,34 @@ Primary functions:
 10. `removePostHogSyncTrigger()`
 11. `syncProjectIdsToAnalysisSheets()`
 
+### `PostHogSolarTables.gs`
+
+The deterministic project-side solar table workflow.
+
+It:
+
+- Reads Project IDs already propagated to `PDF Analysis`.
+- Queries `goodleap_postgres_projects.array_stats` first and uses
+  `goodleap_postgres_solarpanels` to count active panels by `segment_index`.
+- Falls back to the equivalent Artemis Sales projects and solar-panels tables
+  only when the project is unavailable from GoodLeap.
+- Reconstructs project-side Summary and Monthly Solar Access CSVs without
+  calling OpenAI.
+- Stores the CSVs beside the source Shade Report PDF in Drive and writes their
+  links, source, synchronization time, status, and error detail to
+  `PDF Analysis`.
+- Preserves native project segment IDs and calculates panel-count-weighted
+  annual Solar Access and TSRF values.
+- Runs automatically inside each successful PostHog project reconciliation;
+  it requires no third trigger.
+
+Primary functions:
+
+1. `setupPostHogSolarTableSync()`
+2. `testPostHogSolarTableConnection()`
+3. `previewPostHogSolarTableSync()`
+4. `syncPostHogSolarTables()`
+
 ## Script Properties
 
 Open the Apps Script project, select **Project Settings**, and use the
@@ -340,6 +368,17 @@ Optional properties:
 | `POSTHOG_PROJECT_URL_PREFIX` | `https://goodleap.artemis.solar/projects/` | URL prefix |
 | `POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX` | `https://sales.artemis.solar/projects/` | Sales fallback URL prefix |
 | `POSTHOG_PROJECT_URL_SUFFIX` | `/proposal` | URL suffix |
+| `POSTHOG_GOODLEAP_PROJECTS_TABLE` | `goodleap_postgres_projects` | GoodLeap project solar statistics |
+| `POSTHOG_GOODLEAP_SOLAR_PANELS_TABLE` | `goodleap_postgres_solarpanels` | GoodLeap active-panel records |
+| `POSTHOG_ARTEMIS_SALES_SOLAR_PANELS_TABLE` | `artemis_sales_postgres_solarpanels` | Sales fallback active-panel records |
+| `POSTHOG_SOLAR_PROJECT_ID_FIELD` | `id` | Project identifier in project tables |
+| `POSTHOG_SOLAR_ARRAY_STATS_FIELD` | `array_stats` | JSON solar statistics by segment |
+| `POSTHOG_SOLAR_SOURCE_UPDATED_AT_FIELD` | `updated_at` | Project data freshness field |
+| `POSTHOG_SOLAR_PANEL_PROJECT_ID_FIELD` | `project_id` | Panel-to-project mapping field |
+| `POSTHOG_SOLAR_PANEL_SEGMENT_FIELD` | `segment_index` | Panel array/segment identifier |
+| `POSTHOG_SOLAR_PANEL_ACTIVE_FIELD` | `is_active` | Active-panel filter |
+| `POSTHOG_SOLAR_PANEL_AZIMUTH_FIELD` | `azimuth` | Panel azimuth field |
+| `POSTHOG_SOLAR_PANEL_PITCH_FIELD` | `pitch` | Panel pitch field |
 
 Existing properties whose names start with `GOODLEAP_` are managed by
 `Code.gs` and must not be removed.
@@ -381,7 +420,11 @@ complete function order is:
 | 14 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
 | 15 | `previewOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Extract one complete PDF without writing a row or CSV files |
 | 16 | `extractPendingShadeReportPdfsWithOpenAI()` | `OpenAIPdfExtraction.gs` | Write one bounded historical PDF batch; rerun until pendingPdfs is zero |
-| 17 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 17 | `setupPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Upgrade PDF Analysis and validate deterministic solar-table settings |
+| 18 | `testPostHogSolarTableConnection()` | `PostHogSolarTables.gs` | Verify both GoodLeap and Sales project/panel schemas |
+| 19 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
+| 20 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
+| 21 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -660,6 +703,28 @@ The row count is dynamic: one, three, or more Array IDs are all valid. Older or
 equivalent report attachments are not sent to OpenAI and are recorded as
 suppressed duplicates in `PDF Analysis`.
 
+### Adding project-side solar tables to an existing installation
+
+No Sheet columns or triggers need to be created manually.
+
+1. Add `PostHogSolarTables.gs` from this repository to the existing Apps
+   Script project.
+2. Replace `OpenAIPdfExtraction.gs` and `PostHogSync.gs` with the repository
+   versions and save all files.
+3. Run `setupPostHogSolarTableSync()`. It safely renames the existing PDF link
+   headers and inserts the project link, source, timestamp, status, and error
+   columns without moving historical row values incorrectly.
+4. Run `testPostHogSolarTableConnection()` and confirm that both GoodLeap and
+   Artemis Sales tests pass.
+5. Run `previewPostHogSolarTableSync()` and verify at least one known Project
+   ID, data source, and active array count.
+6. Run `syncPostHogSolarTables()` once for the historical backfill.
+7. Open both new project CSV links and compare them with the corresponding PDF
+   CSVs. Native project segment IDs may differ from the PDF's presentation IDs,
+   and genuine differences can reflect a newer cloud design revision.
+8. Do not add or replace triggers. The existing five-minute coordinator and
+   hourly PostHog reconciliation automatically invoke the new workflow.
+
 ### Adding Project ID to existing AI Analysis and PDF Analysis sheets
 
 Do not insert either column manually. The migration preserves all existing
@@ -832,6 +897,10 @@ stop all PostHog calls while keeping Gmail automation, run
 - Every successful PostHog reconciliation refreshes `Project ID` in both
   analysis sheets by matching their `Application ID` values. `Not Found` rows
   remain blank until a later synchronization returns a Project ID.
+- After Project IDs are refreshed, `PostHogSolarTables.gs` rebuilds the
+  project-side Summary and Monthly CSVs from structured PostHog data. GoodLeap
+  is queried first and Artemis Sales is the fallback. The CSVs are stored in
+  the same project Drive folder as the Shade Report.
 - Both workflows use the same Apps Script lock, preventing overlapping writes.
 - Empty Gmail checks do not create PostHog requests.
 - The PostHog sync sends Application IDs only; it does not send email bodies,
@@ -855,6 +924,9 @@ The deployment is ready only when all of the following are true:
   Shade Report.
 - `PDF Analysis` links to valid Summary and Monthly CSV files and has no
   unexplained `Error` or human-review rows.
+- `testPostHogSolarTableConnection()` passes for GoodLeap and Artemis Sales,
+  and `PDF Analysis` links to valid project-side Summary and Monthly CSVs with
+  an explained `Project Data Status`.
 - `AI Analysis` and `PDF Analysis` contain the same Project ID shown for their
   Application ID in `PostHog Projects`, or remain blank when it is `Not Found`.
 - The **Triggers** page shows one
@@ -872,7 +944,7 @@ new source record can remain temporarily unavailable in PostHog.
 
 1. Confirm that the target account receives the group messages in Gmail and
    can access the intended PostHog environment.
-2. Copy the five `.gs` files into a new standalone Apps Script project.
+2. Copy the six `.gs` files into a new standalone Apps Script project.
 3. Review the Gmail query, historical start date, and time zone.
 4. Obtain a new purpose-specific PostHog Personal API Key; do not reuse another
    person's key.
@@ -884,11 +956,13 @@ new source record can remain temporarily unavailable in PostHog.
    analysis.
 9. Run the OpenAI PDF setup, connection test, candidate preview, extraction
    preview, and bounded historical extraction. Review both generated CSVs.
-10. Use the schema inspection functions only if the default mapping fails in
+10. Run the PostHog solar-table setup, connection test, preview, and historical
+    synchronization. Review both project-side CSVs.
+11. Use the schema inspection functions only if the default mapping fails in
    the target environment.
-11. After all workflows have been validated, run
+12. After all workflows have been validated, run
    `installHybridGoodLeapPostHogTriggers()`.
-12. Confirm that exactly one integrated five-minute trigger and one hourly
+13. Confirm that exactly one integrated five-minute trigger and one hourly
    PostHog trigger exist.
 
 All Drive folders, Sheets tabs, Gmail labels, and time-based triggers are

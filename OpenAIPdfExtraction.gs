@@ -59,6 +59,37 @@ const OPENAI_PDF_HEADERS = [
   'Duplicate Filenames',
   'Summary Array Count',
   'Monthly Array Count',
+  'PDF Summary CSV URL',
+  'PDF Monthly CSV URL',
+  'Project Summary CSV URL',
+  'Project Monthly CSV URL',
+  'Project Data Source',
+  'Project Data Synced At',
+  'Project Data Status',
+  'Project Data Error',
+  'Summary Pages',
+  'Monthly Pages',
+  'Validation Notes',
+  'Human Review Required',
+  'Model',
+  'OpenAI Response ID',
+  'Extraction Status',
+  'Error',
+];
+
+const LEGACY_OPENAI_PDF_HEADERS_V1 = [
+  'Source Drive File ID',
+  'Application ID',
+  'Analyzed At',
+  'Source Received At',
+  'Source Filename',
+  'Source PDF URL',
+  'Attachment Hash',
+  'Size Bytes',
+  'Duplicate Count',
+  'Duplicate Filenames',
+  'Summary Array Count',
+  'Monthly Array Count',
   'Summary CSV URL',
   'Monthly CSV URL',
   'Summary Pages',
@@ -71,9 +102,31 @@ const OPENAI_PDF_HEADERS = [
   'Error',
 ];
 
-const LEGACY_OPENAI_PDF_HEADERS = OPENAI_PDF_HEADERS.filter(
-  (header) => header !== 'Project ID',
-);
+const LEGACY_OPENAI_PDF_HEADERS_V2 = [
+  'Source Drive File ID',
+  'Project ID',
+  'Application ID',
+  'Analyzed At',
+  'Source Received At',
+  'Source Filename',
+  'Source PDF URL',
+  'Attachment Hash',
+  'Size Bytes',
+  'Duplicate Count',
+  'Duplicate Filenames',
+  'Summary Array Count',
+  'Monthly Array Count',
+  'Summary CSV URL',
+  'Monthly CSV URL',
+  'Summary Pages',
+  'Monthly Pages',
+  'Validation Notes',
+  'Human Review Required',
+  'Model',
+  'OpenAI Response ID',
+  'Extraction Status',
+  'Error',
+];
 
 const OPENAI_PDF_ATTACHMENT_REQUIRED_HEADERS = [
   'Processed At',
@@ -465,6 +518,7 @@ function getOrCreateOpenAIPdfSheet_(spreadsheet) {
   );
   sheet.setFrozenRows(1);
   sheet.getRange('D:E').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sheet.getRange('S:S').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   sheet.setColumnWidth(1, 230);
   sheet.setColumnWidth(2, 280);
   sheet.setColumnWidth(3, 130);
@@ -474,11 +528,18 @@ function getOrCreateOpenAIPdfSheet_(spreadsheet) {
   sheet.setColumnWidth(11, 420);
   sheet.setColumnWidth(14, 320);
   sheet.setColumnWidth(15, 320);
-  sheet.setColumnWidth(18, 520);
-  sheet.setColumnWidth(23, 420);
+  sheet.setColumnWidth(16, 320);
+  sheet.setColumnWidth(17, 320);
+  sheet.setColumnWidth(18, 140);
+  sheet.setColumnWidth(19, 170);
+  sheet.setColumnWidth(20, 150);
+  sheet.setColumnWidth(21, 420);
+  sheet.setColumnWidth(24, 520);
+  sheet.setColumnWidth(29, 420);
   sheet.getRange('K:K').setWrap(true);
-  sheet.getRange('R:R').setWrap(true);
-  sheet.getRange('W:W').setWrap(true);
+  sheet.getRange('U:U').setWrap(true);
+  sheet.getRange('X:X').setWrap(true);
+  sheet.getRange('AC:AC').setWrap(true);
   return sheet;
 }
 
@@ -487,12 +548,8 @@ function migrateOpenAIPdfSheetSchema_(spreadsheet) {
   if (!sheet || sheet.getLastRow() === 0) {
     return;
   }
-  const headerCount = Math.min(
-    sheet.getLastColumn(),
-    OPENAI_PDF_HEADERS.length,
-  );
-  const headers = sheet
-    .getRange(1, 1, 1, headerCount)
+  let headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
     .getDisplayValues()[0];
   const isCurrent = OPENAI_PDF_HEADERS.every(
     (header, index) => headers[index] === header,
@@ -500,16 +557,31 @@ function migrateOpenAIPdfSheetSchema_(spreadsheet) {
   if (isCurrent) {
     return;
   }
-  const isLegacy = LEGACY_OPENAI_PDF_HEADERS.every(
+  const isLegacyV1 = LEGACY_OPENAI_PDF_HEADERS_V1.every(
     (header, index) => headers[index] === header,
   );
-  if (!isLegacy) {
+  const isLegacyV2 = LEGACY_OPENAI_PDF_HEADERS_V2.every(
+    (header, index) => headers[index] === header,
+  );
+  if (!isLegacyV1 && !isLegacyV2) {
     return;
   }
-  sheet.insertColumnBefore(2);
-  formatAnalysisHeaderCell_(sheet.getRange(1, 2), 'Project ID');
+
+  if (isLegacyV1) {
+    sheet.insertColumnBefore(2);
+    formatAnalysisHeaderCell_(sheet.getRange(1, 2), 'Project ID');
+  }
+
+  // Preserve the two PDF-derived links, label their source explicitly, and
+  // insert the project-derived fields immediately after them.
+  sheet.getRange(1, 14).setValue('PDF Summary CSV URL');
+  sheet.getRange(1, 15).setValue('PDF Monthly CSV URL');
+  sheet.insertColumnsBefore(16, 6);
+  OPENAI_PDF_HEADERS.slice(15, 21).forEach((header, offset) => {
+    formatAnalysisHeaderCell_(sheet.getRange(1, 16 + offset), header);
+  });
   console.log(
-    'PDF Analysis schema upgraded: Project ID was inserted as column B.',
+    'PDF Analysis schema upgraded with project-derived solar table fields.',
   );
 }
 
@@ -1130,6 +1202,12 @@ function buildOpenAIPdfTrackingRow_(
     Array.isArray(value.monthly_rows) ? value.monthly_rows.length : 0,
     csvFiles.summaryUrl || '',
     csvFiles.monthlyUrl || '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
     Array.isArray(sourcePages.summary) ? sourcePages.summary.join(', ') : '',
     Array.isArray(sourcePages.monthly) ? sourcePages.monthly.join(', ') : '',
     validation && Array.isArray(validation.notes)

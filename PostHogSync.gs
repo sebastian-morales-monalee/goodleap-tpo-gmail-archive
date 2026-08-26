@@ -641,6 +641,17 @@ function syncPostHogProjects() {
     stats.analysisProjectIds = syncPostHogProjectIdsToAnalysisSheets_(
       resources.spreadsheet,
     );
+    if (typeof syncPostHogSolarTablesForResources_ === 'function') {
+      try {
+        stats.projectSolarTables = syncPostHogSolarTablesForResources_(
+          resources,
+        );
+      } catch (error) {
+        const safeSolarError = truncatePostHogText_(String(error), 1000);
+        stats.projectSolarTables = {error: safeSolarError};
+        console.error(`[PROJECT SOLAR SYNC ERROR] ${safeSolarError}`);
+      }
+    }
     SpreadsheetApp.flush();
 
     console.log(JSON.stringify(stats, null, 2));
@@ -758,6 +769,9 @@ function processRecentGoodLeapEmailsAndSyncPostHog() {
 function installHybridGoodLeapPostHogTriggers() {
   setupGoodLeapArchive();
   setupPostHogProjectSync();
+  if (typeof setupPostHogSolarTableSync === 'function') {
+    setupPostHogSolarTableSync();
+  }
 
   const managedHandlers = new Set(
     GOODLEAP_FIVE_MINUTE_TRIGGER_HANDLERS.concat(['syncPostHogProjects']),
