@@ -2,54 +2,81 @@
  * GoodLeap TPO - AI primary-category dashboard
  *
  * This file belongs in the SAME Apps Script project as OpenAIAnalysis.gs. It
- * reads the managed "AI Analysis" sheet, counts every non-empty Primary
- * Category, and maintains an idempotent summary table and column chart in the
- * "AI Dashboard" sheet. It does not call OpenAI, Gmail, Drive, or PostHog.
+ * reads "AI Analysis", maintains the complete weekly history in
+ * "AI Weekly Summary", and shows one all-time chart plus the eight most recent
+ * weekly charts in "AI Dashboard". It does not call OpenAI, Gmail, Drive, or
+ * PostHog.
  *
  * Safe first-run sequence:
  *   1) previewAIAnalysisDashboard()
  *   2) setupAIAnalysisDashboard()
  *
  * OpenAIAnalysis.gs calls refreshAIAnalysisDashboardSafely_() after each
- * automatic analysis check. The dashboard is rewritten only when its category
- * counts changed, so the existing five-minute trigger remains sufficient.
+ * automatic analysis check. The existing five-minute trigger is sufficient.
  */
 
 const AI_ANALYSIS_DASHBOARD_CONFIG = {
   SHEET_NAME: 'AI Dashboard',
+  WEEKLY_SHEET_NAME: 'AI Weekly Summary',
   SOURCE_SHEET_NAME: 'AI Analysis',
   PRIMARY_CATEGORY_HEADER: 'Primary Category',
+  EMAIL_RECEIVED_AT_HEADER: 'Email Received At',
   TABLE_HEADERS: ['Primary Category', 'Count', 'Percentage'],
+  WEEKLY_HEADERS: [
+    'Week Start',
+    'Week End',
+    'Primary Category',
+    'Count',
+    'Percentage',
+    'Week Total',
+  ],
   TITLE: 'AI Analysis - Primary Category Dashboard',
+  TIME_ZONE: 'America/Bogota',
+  WEEKLY_CHART_LIMIT: 8,
+  CATEGORY_SLOT_ROWS: 20,
+  WEEKLY_FIRST_ROW: 32,
+  WEEKLY_BLOCK_HEIGHT: 28,
+  CHART_COLUMN: 5,
+  LAYOUT_NOTE: 'Managed AI Dashboard layout v2: all-time plus eight weekly charts.',
   HEADER_COLOR: '#6e04bd',
   HEADER_TEXT_COLOR: '#ffffff',
   CHART_COLOR: '#4285f4',
 };
 
 /**
- * Creates or rebuilds AI Dashboard from all existing AI Analysis rows.
- * This function is idempotent and does not call OpenAI.
+ * Creates or rebuilds AI Weekly Summary and AI Dashboard from all existing
+ * AI Analysis rows. This function is idempotent and does not call OpenAI.
  */
 function setupAIAnalysisDashboard() {
   const resources = getOrCreateResources_();
   const summary = loadAIAnalysisDashboardSummary_(resources.spreadsheet);
-  const stats = writeAIAnalysisDashboard_(
+  const weeklyStats = writeAIWeeklySummary_(
     resources.spreadsheet,
     summary,
     true,
   );
+  const dashboardStats = writeAIAnalysisDashboard_(
+    resources.spreadsheet,
+    summary,
+    true,
+  );
+  const stats = buildAIAnalysisDashboardStats_(
+    summary,
+    weeklyStats,
+    dashboardStats,
+  );
 
   console.log('AI Analysis dashboard setup completed.');
   console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
+  console.log(`Weekly history sheet: ${AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME}`);
   console.log(`Dashboard sheet: ${AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME}`);
-  console.log(`Analyzed categories counted: ${summary.totalCount}.`);
-  console.log(`Distinct primary categories: ${summary.rows.length}.`);
-
+  console.log(JSON.stringify(stats, null, 2));
   return stats;
 }
 
 /**
- * Logs the category counts without creating or modifying AI Dashboard.
+ * Logs the all-time and weekly category counts without modifying either
+ * managed reporting sheet.
  */
 function previewAIAnalysisDashboard() {
   const resources = getOrCreateResources_();
@@ -57,39 +84,51 @@ function previewAIAnalysisDashboard() {
 
   summary.rows.forEach((row) => {
     console.log(
-      `[CATEGORY] ${row.category} | ${row.count} | ` +
+      `[ALL TIME] ${row.category} | ${row.count} | ` +
       `${(row.percentage * 100).toFixed(2)}%`,
     );
   });
-  console.log(
-    JSON.stringify(
-      {
-        totalCount: summary.totalCount,
-        distinctCategories: summary.rows.length,
-      },
-      null,
-      2,
-    ),
-  );
+  summary.weeks
+    .slice(0, AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_LIMIT)
+    .forEach((week) => {
+      console.log(
+        `[WEEK] ${week.start} to ${week.end} | ` +
+        `categorized=${week.totalCount} | categories=${week.rows.length}`,
+      );
+      week.rows.forEach((row) => {
+        console.log(
+          `[WEEK CATEGORY] ${week.start} | ${row.category} | ` +
+          `${row.count} | ${(row.percentage * 100).toFixed(2)}%`,
+        );
+      });
+    });
 
-  return {
-    totalCount: summary.totalCount,
-    distinctCategories: summary.rows.length,
-    categories: summary.rows,
-  };
+  const stats = buildAIAnalysisDashboardStats_(summary, null, null);
+  console.log(JSON.stringify(stats, null, 2));
+  return stats;
 }
 
 /**
- * Refreshes AI Dashboard only when the managed summary differs from the
- * current AI Analysis data. It is safe to run manually at any time.
+ * Refreshes both managed reporting sheets only when their source data differs
+ * from AI Analysis. It is safe to run manually at any time.
  */
 function refreshAIAnalysisDashboard() {
   const resources = getOrCreateResources_();
   const summary = loadAIAnalysisDashboardSummary_(resources.spreadsheet);
-  const stats = writeAIAnalysisDashboard_(
+  const weeklyStats = writeAIWeeklySummary_(
     resources.spreadsheet,
     summary,
     false,
+  );
+  const dashboardStats = writeAIAnalysisDashboard_(
+    resources.spreadsheet,
+    summary,
+    false,
+  );
+  const stats = buildAIAnalysisDashboardStats_(
+    summary,
+    weeklyStats,
+    dashboardStats,
   );
 
   console.log(JSON.stringify(stats, null, 2));
@@ -122,40 +161,104 @@ function loadAIAnalysisDashboardSummary_(spreadsheet) {
     );
   }
 
-  const lastColumn = sourceSheet.getLastColumn();
-  const headers = sourceSheet
-    .getRange(1, 1, 1, lastColumn)
-    .getDisplayValues()[0]
-    .map((value) => String(value).trim());
+  const values = sourceSheet
+    .getRange(
+      1,
+      1,
+      sourceSheet.getLastRow(),
+      sourceSheet.getLastColumn(),
+    )
+    .getValues();
+  const headers = values[0].map((value) => String(value).trim());
   const categoryIndex = headers.indexOf(
     AI_ANALYSIS_DASHBOARD_CONFIG.PRIMARY_CATEGORY_HEADER,
+  );
+  const receivedAtIndex = headers.indexOf(
+    AI_ANALYSIS_DASHBOARD_CONFIG.EMAIL_RECEIVED_AT_HEADER,
   );
   if (categoryIndex < 0) {
     throw new Error(
       'AI Analysis does not contain the required Primary Category header.',
     );
   }
-
-  const counts = new Map();
-  const dataRowCount = Math.max(0, sourceSheet.getLastRow() - 1);
-  if (dataRowCount > 0) {
-    const values = sourceSheet
-      .getRange(2, categoryIndex + 1, dataRowCount, 1)
-      .getDisplayValues();
-    values.forEach((row) => {
-      const category = String(row[0] || '').trim();
-      if (!category) {
-        return;
-      }
-      counts.set(category, Number(counts.get(category) || 0) + 1);
-    });
+  if (receivedAtIndex < 0) {
+    throw new Error(
+      'AI Analysis does not contain the required Email Received At header.',
+    );
   }
 
-  const totalCount = Array.from(counts.values()).reduce(
+  const allTimeCounts = new Map();
+  const weeklyCounts = new Map();
+  let categorizedRows = 0;
+  let uncategorizedRows = 0;
+  let excludedFromWeeklyCount = 0;
+
+  values.slice(1).forEach((row) => {
+    const category = String(row[categoryIndex] || '').trim();
+    if (!category) {
+      uncategorizedRows += 1;
+      return;
+    }
+
+    categorizedRows += 1;
+    incrementAIAnalysisCategoryCount_(allTimeCounts, category);
+
+    const receivedAt = normalizeAIAnalysisDashboardDate_(
+      row[receivedAtIndex],
+    );
+    if (!receivedAt) {
+      excludedFromWeeklyCount += 1;
+      return;
+    }
+
+    const bounds = getAIAnalysisWeekBounds_(receivedAt);
+    if (!weeklyCounts.has(bounds.start)) {
+      weeklyCounts.set(bounds.start, {
+        start: bounds.start,
+        end: bounds.end,
+        counts: new Map(),
+      });
+    }
+    incrementAIAnalysisCategoryCount_(
+      weeklyCounts.get(bounds.start).counts,
+      category,
+    );
+  });
+
+  const rows = buildAIAnalysisCategoryRows_(allTimeCounts);
+  const weeks = Array.from(weeklyCounts.values())
+    .map((week) => ({
+      start: week.start,
+      end: week.end,
+      totalCount: sumAIAnalysisCategoryCounts_(week.counts),
+      rows: buildAIAnalysisCategoryRows_(week.counts),
+    }))
+    .sort((left, right) => right.start.localeCompare(left.start));
+
+  assertAIAnalysisDashboardCapacity_(rows, weeks);
+  return {
+    totalCount: categorizedRows,
+    rows,
+    weeks,
+    uncategorizedRows,
+    excludedFromWeeklyCount,
+  };
+}
+
+function incrementAIAnalysisCategoryCount_(counts, category) {
+  counts.set(category, Number(counts.get(category) || 0) + 1);
+}
+
+function sumAIAnalysisCategoryCounts_(counts) {
+  return Array.from(counts.values()).reduce(
     (total, count) => total + count,
     0,
   );
-  const rows = Array.from(counts.entries())
+}
+
+function buildAIAnalysisCategoryRows_(counts) {
+  const totalCount = sumAIAnalysisCategoryCounts_(counts);
+  return Array.from(counts.entries())
     .map(([category, count]) => ({
       category,
       count,
@@ -167,8 +270,187 @@ function loadAIAnalysisDashboardSummary_(spreadsheet) {
       }
       return left.category.localeCompare(right.category);
     });
+}
 
-  return {totalCount, rows};
+function normalizeAIAnalysisDashboardDate_(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Date(value.getTime());
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value > 100000000000) {
+      const timestampDate = new Date(value);
+      return Number.isNaN(timestampDate.getTime()) ? null : timestampDate;
+    }
+    const sheetSerialDate = new Date((value - 25569) * 86400000);
+    return Number.isNaN(sheetSerialDate.getTime()) ? null : sheetSerialDate;
+  }
+
+  const text = String(value || '').trim();
+  if (!text) {
+    return null;
+  }
+  const colombiaDateTime = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/,
+  );
+  if (colombiaDateTime) {
+    const isoValue =
+      `${colombiaDateTime[1]}-${colombiaDateTime[2]}-${colombiaDateTime[3]}` +
+      `T${colombiaDateTime[4] || '00'}:${colombiaDateTime[5] || '00'}:` +
+      `${colombiaDateTime[6] || '00'}-05:00`;
+    const parsedColombiaDate = new Date(isoValue);
+    if (!Number.isNaN(parsedColombiaDate.getTime())) {
+      return parsedColombiaDate;
+    }
+  }
+
+  const parsedDate = new Date(text);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
+function getAIAnalysisWeekBounds_(date) {
+  const dateText = Utilities.formatDate(
+    date,
+    AI_ANALYSIS_DASHBOARD_CONFIG.TIME_ZONE,
+    'yyyy-MM-dd',
+  );
+  const [year, month, day] = dateText.split('-').map(Number);
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
+  const mondayOffset = (calendarDate.getUTCDay() + 6) % 7;
+  const startDate = new Date(calendarDate.getTime());
+  startDate.setUTCDate(startDate.getUTCDate() - mondayOffset);
+  const endDate = new Date(startDate.getTime());
+  endDate.setUTCDate(endDate.getUTCDate() + 6);
+
+  return {
+    start: Utilities.formatDate(startDate, 'UTC', 'yyyy-MM-dd'),
+    end: Utilities.formatDate(endDate, 'UTC', 'yyyy-MM-dd'),
+  };
+}
+
+function assertAIAnalysisDashboardCapacity_(allTimeRows, weeks) {
+  const maximumRows = Math.max(
+    allTimeRows.length,
+    ...weeks.map((week) => week.rows.length),
+    0,
+  );
+  if (maximumRows > AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_SLOT_ROWS) {
+    throw new Error(
+      `The dashboard supports up to ` +
+      `${AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_SLOT_ROWS} categories per ` +
+      `chart, but ${maximumRows} were found. Increase CATEGORY_SLOT_ROWS.`,
+    );
+  }
+}
+
+function buildAIWeeklySummaryOutput_(summary) {
+  const output = [];
+  summary.weeks.forEach((week) => {
+    week.rows.forEach((row) => {
+      output.push([
+        week.start,
+        week.end,
+        row.category,
+        row.count,
+        row.percentage,
+        week.totalCount,
+      ]);
+    });
+  });
+  return output;
+}
+
+function writeAIWeeklySummary_(spreadsheet, summary, force) {
+  let sheet = spreadsheet.getSheetByName(
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME,
+  );
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(
+      AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME,
+    );
+    force = true;
+  }
+
+  const output = buildAIWeeklySummaryOutput_(summary);
+  if (!force && doesAIWeeklySummaryMatch_(sheet, output)) {
+    return {
+      sheet: sheet.getName(),
+      updated: false,
+      unchanged: true,
+      rows: output.length,
+      historicalWeeks: summary.weeks.length,
+    };
+  }
+
+  sheet.clear();
+  ensureAIAnalysisSheetCapacity_(sheet, output.length + 1, 6);
+  sheet.setHiddenGridlines(false);
+  sheet.setFrozenRows(1);
+  sheet
+    .getRange(
+      1,
+      1,
+      1,
+      AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_HEADERS.length,
+    )
+    .setValues([AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_HEADERS])
+    .setFontWeight('bold')
+    .setBackground(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_COLOR)
+    .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR);
+
+  if (output.length > 0) {
+    sheet.getRange(2, 1, output.length, 2).setNumberFormat('@');
+    sheet.getRange(2, 1, output.length, output[0].length).setValues(output);
+    sheet.getRange(2, 4, output.length, 1).setNumberFormat('0');
+    sheet.getRange(2, 5, output.length, 1).setNumberFormat('0.00%');
+    sheet.getRange(2, 6, output.length, 1).setNumberFormat('0');
+  }
+
+  sheet.setColumnWidth(1, 120);
+  sheet.setColumnWidth(2, 120);
+  sheet.setColumnWidth(3, 240);
+  sheet.setColumnWidth(4, 100);
+  sheet.setColumnWidth(5, 120);
+  sheet.setColumnWidth(6, 110);
+  return {
+    sheet: sheet.getName(),
+    updated: true,
+    unchanged: false,
+    rows: output.length,
+    historicalWeeks: summary.weeks.length,
+  };
+}
+
+function doesAIWeeklySummaryMatch_(sheet, output) {
+  if (sheet.getLastRow() < 1 || sheet.getLastColumn() < 6) {
+    return false;
+  }
+  const headers = sheet.getRange(1, 1, 1, 6).getDisplayValues()[0];
+  if (
+    headers.some(
+      (header, index) =>
+        String(header).trim() !==
+        AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_HEADERS[index],
+    )
+  ) {
+    return false;
+  }
+  if (Math.max(0, sheet.getLastRow() - 1) !== output.length) {
+    return false;
+  }
+  if (output.length === 0) {
+    return true;
+  }
+
+  const existing = sheet.getRange(2, 1, output.length, 6).getValues();
+  return output.every((row, rowIndex) =>
+    row.every((value, columnIndex) => {
+      const current = existing[rowIndex][columnIndex];
+      if (columnIndex === 3 || columnIndex === 4 || columnIndex === 5) {
+        return Math.abs(Number(current) - Number(value)) < 0.0000001;
+      }
+      return String(current).trim() === String(value).trim();
+    }),
+  );
 }
 
 function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
@@ -182,16 +464,58 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     force = true;
   }
 
-  if (!force && doesAIAnalysisDashboardMatch_(sheet, summary)) {
+  const visibleWeeks = summary.weeks.slice(
+    0,
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_LIMIT,
+  );
+  const layoutMatches = doesAIAnalysisDashboardLayoutMatch_(
+    sheet,
+    summary,
+    visibleWeeks,
+  );
+  if (
+    !force &&
+    layoutMatches &&
+    doesAIAnalysisDashboardDataMatch_(sheet, summary, visibleWeeks)
+  ) {
     return {
       sheet: sheet.getName(),
       updated: false,
       unchanged: true,
-      totalCount: summary.totalCount,
-      distinctCategories: summary.rows.length,
+      chartsRebuilt: false,
+      charts: expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks),
+      weeklyCharts: visibleWeeks.length,
     };
   }
 
+  const rebuildLayout = force || !layoutMatches;
+  if (rebuildLayout) {
+    initializeAIAnalysisDashboardLayout_(sheet, visibleWeeks);
+  } else {
+    clearAIAnalysisDashboardValues_(sheet, visibleWeeks.length);
+  }
+  writeAIAnalysisDashboardValues_(sheet, summary, visibleWeeks);
+  if (rebuildLayout) {
+    insertAIAnalysisDashboardCharts_(sheet, summary, visibleWeeks);
+  }
+  SpreadsheetApp.flush();
+
+  return {
+    sheet: sheet.getName(),
+    updated: true,
+    unchanged: false,
+    chartsRebuilt: rebuildLayout,
+    charts: expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks),
+    weeklyCharts: visibleWeeks.length,
+  };
+}
+
+function initializeAIAnalysisDashboardLayout_(sheet, visibleWeeks) {
+  ensureAIAnalysisSheetCapacity_(
+    sheet,
+    getAIAnalysisDashboardLastManagedRow_(visibleWeeks.length),
+    AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLUMN,
+  );
   sheet.getCharts().forEach((chart) => sheet.removeChart(chart));
   if (sheet.getLastRow() > 0 && sheet.getLastColumn() > 0) {
     sheet.getDataRange().breakApart();
@@ -201,88 +525,235 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
   sheet.setFrozenRows(4);
 
   sheet.getRange('A1:D1').merge();
+  formatAIAnalysisDashboardTitle_(sheet.getRange('A1:D1'));
+  formatAIAnalysisDashboardHeader_(sheet.getRange(4, 1, 1, 3));
+
+  visibleWeeks.forEach((week, index) => {
+    const startRow = getAIAnalysisWeeklyBlockStartRow_(index);
+    sheet.getRange(startRow, 1, 1, 4).merge();
+    formatAIAnalysisDashboardTitle_(sheet.getRange(startRow, 1, 1, 4));
+    formatAIAnalysisDashboardHeader_(
+      sheet.getRange(startRow + 3, 1, 1, 3),
+    );
+  });
+
+  sheet.setColumnWidth(1, 240);
+  sheet.setColumnWidth(2, 100);
+  sheet.setColumnWidth(3, 150);
+  sheet.setColumnWidth(4, 150);
+}
+
+function clearAIAnalysisDashboardValues_(sheet, visibleWeekCount) {
+  const lastManagedRow = getAIAnalysisDashboardLastManagedRow_(
+    visibleWeekCount,
+  );
+  sheet.getRange(1, 1, lastManagedRow, 4).clearContent();
+}
+
+function writeAIAnalysisDashboardValues_(sheet, summary, visibleWeeks) {
   sheet
     .getRange('A1')
     .setValue(AI_ANALYSIS_DASHBOARD_CONFIG.TITLE)
+    .setNote(AI_ANALYSIS_DASHBOARD_CONFIG.LAYOUT_NOTE);
+  sheet.getRange('A2').setValue('Updated At').setFontWeight('bold');
+  sheet
+    .getRange('B2')
+    .setValue(new Date())
+    .setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sheet.getRange('C2').setValue('Total Categorized Rows').setFontWeight('bold');
+  sheet.getRange('D2').setValue(summary.totalCount).setNumberFormat('0');
+  sheet.getRange('A3').setValue('Historical Weeks').setFontWeight('bold');
+  sheet.getRange('B3').setValue(summary.weeks.length).setNumberFormat('0');
+  sheet
+    .getRange('C3')
+    .setValue('Excluded From Weekly')
+    .setFontWeight('bold');
+  sheet
+    .getRange('D3')
+    .setValue(summary.excludedFromWeeklyCount)
+    .setNumberFormat('0');
+
+  writeAIAnalysisCategorySlot_(sheet, 4, summary.rows, true);
+
+  visibleWeeks.forEach((week, index) => {
+    const startRow = getAIAnalysisWeeklyBlockStartRow_(index);
+    sheet
+      .getRange(startRow, 1)
+      .setValue(`Week ${week.start} to ${week.end}`);
+    sheet.getRange(startRow + 1, 1).setValue('Week Start').setFontWeight('bold');
+    sheet.getRange(startRow + 1, 2).setNumberFormat('@').setValue(week.start);
+    sheet.getRange(startRow + 1, 3).setValue('Week End').setFontWeight('bold');
+    sheet.getRange(startRow + 1, 4).setNumberFormat('@').setValue(week.end);
+    sheet
+      .getRange(startRow + 2, 1)
+      .setValue('Categorized Emails')
+      .setFontWeight('bold');
+    sheet.getRange(startRow + 2, 2).setValue(week.totalCount);
+    writeAIAnalysisCategorySlot_(sheet, startRow + 3, week.rows, false);
+  });
+}
+
+function writeAIAnalysisCategorySlot_(sheet, headerRow, rows, allowEmpty) {
+  sheet
+    .getRange(headerRow, 1, 1, 3)
+    .setValues([AI_ANALYSIS_DASHBOARD_CONFIG.TABLE_HEADERS]);
+  const dataStartRow = headerRow + 1;
+  if (rows.length > 0) {
+    const output = rows.map((row) => [
+      row.category,
+      row.count,
+      row.percentage,
+    ]);
+    sheet.getRange(dataStartRow, 1, output.length, 3).setValues(output);
+    sheet.getRange(dataStartRow, 2, output.length, 1).setNumberFormat('0');
+    sheet
+      .getRange(dataStartRow, 3, output.length, 1)
+      .setNumberFormat('0.00%');
+  } else if (allowEmpty) {
+    sheet
+      .getRange(dataStartRow, 1)
+      .setValue('No categorized AI Analysis rows found.');
+  }
+}
+
+function formatAIAnalysisDashboardTitle_(range) {
+  range
     .setFontSize(16)
     .setFontWeight('bold')
     .setBackground(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_COLOR)
     .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR)
     .setHorizontalAlignment('center');
+}
 
-  sheet.getRange('A2').setValue('Updated At').setFontWeight('bold');
-  sheet.getRange('B2').setValue(new Date()).setNumberFormat(
-    'yyyy-mm-dd hh:mm:ss',
-  );
-  sheet.getRange('C2').setValue('Total Categorized Rows').setFontWeight(
-    'bold',
-  );
-  sheet.getRange('D2').setValue(summary.totalCount);
-
-  sheet
-    .getRange(4, 1, 1, AI_ANALYSIS_DASHBOARD_CONFIG.TABLE_HEADERS.length)
-    .setValues([AI_ANALYSIS_DASHBOARD_CONFIG.TABLE_HEADERS])
+function formatAIAnalysisDashboardHeader_(range) {
+  range
     .setFontWeight('bold')
     .setBackground(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_COLOR)
     .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR);
-
-  if (summary.rows.length > 0) {
-    const output = summary.rows.map((row) => [
-      row.category,
-      row.count,
-      row.percentage,
-    ]);
-    sheet.getRange(5, 1, output.length, 3).setValues(output);
-    sheet.getRange(5, 2, output.length, 1).setNumberFormat('0');
-    sheet.getRange(5, 3, output.length, 1).setNumberFormat('0.00%');
-
-    const chart = sheet
-      .newChart()
-      .asColumnChart()
-      .addRange(sheet.getRange(4, 1, output.length + 1, 2))
-      .setNumHeaders(1)
-      .setPosition(2, 5, 0, 0)
-      .setOption('title', 'Count of Primary Category')
-      .setOption('legend', {position: 'none'})
-      .setOption('colors', [AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLOR])
-      .setOption('width', 900)
-      .setOption('height', 500)
-      .setOption('hAxis', {
-        title: 'Primary Category',
-        slantedText: true,
-        slantedTextAngle: 30,
-      })
-      .setOption('vAxis', {
-        title: 'Count',
-        minValue: 0,
-        format: '0',
-      })
-      .build();
-    sheet.insertChart(chart);
-  } else {
-    sheet.getRange('A5').setValue('No categorized AI Analysis rows found.');
-  }
-
-  sheet.setColumnWidth(1, 240);
-  sheet.setColumnWidth(2, 100);
-  sheet.setColumnWidth(3, 120);
-  sheet.setColumnWidth(4, 150);
-  SpreadsheetApp.flush();
-
-  return {
-    sheet: sheet.getName(),
-    updated: true,
-    unchanged: false,
-    totalCount: summary.totalCount,
-    distinctCategories: summary.rows.length,
-  };
 }
 
-function doesAIAnalysisDashboardMatch_(sheet, summary) {
-  if (sheet.getLastRow() < 4 || sheet.getLastColumn() < 3) {
+function insertAIAnalysisDashboardCharts_(sheet, summary, visibleWeeks) {
+  if (summary.rows.length > 0) {
+    insertAIAnalysisCategoryChart_(
+      sheet,
+      4,
+      2,
+      'All-time Count of Primary Category',
+    );
+  }
+  visibleWeeks.forEach((week, index) => {
+    const startRow = getAIAnalysisWeeklyBlockStartRow_(index);
+    insertAIAnalysisCategoryChart_(
+      sheet,
+      startRow + 3,
+      startRow + 1,
+      `Primary Category Count: ${week.start} to ${week.end}`,
+    );
+  });
+}
+
+function insertAIAnalysisCategoryChart_(sheet, headerRow, chartRow, title) {
+  const chart = sheet
+    .newChart()
+    .asColumnChart()
+    .addRange(
+      sheet.getRange(
+        headerRow,
+        1,
+        AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_SLOT_ROWS + 1,
+        2,
+      ),
+    )
+    .setNumHeaders(1)
+    .setPosition(
+      chartRow,
+      AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLUMN,
+      0,
+      0,
+    )
+    .setOption('title', title)
+    .setOption('legend', {position: 'none'})
+    .setOption('colors', [AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLOR])
+    .setOption('width', 900)
+    .setOption('height', 500)
+    .setOption('hAxis', {
+      title: 'Primary Category',
+      slantedText: true,
+      slantedTextAngle: 30,
+    })
+    .setOption('vAxis', {
+      title: 'Count',
+      minValue: 0,
+      format: '0',
+    })
+    .build();
+  sheet.insertChart(chart);
+}
+
+function doesAIAnalysisDashboardLayoutMatch_(sheet, summary, visibleWeeks) {
+  if (sheet.getLastRow() < 4 || sheet.getLastColumn() < 4) {
     return false;
   }
-  const headers = sheet.getRange(4, 1, 1, 3).getDisplayValues()[0];
+  if (
+    sheet.getRange('A1').getNote() !==
+    AI_ANALYSIS_DASHBOARD_CONFIG.LAYOUT_NOTE
+  ) {
+    return false;
+  }
+  if (
+    sheet.getCharts().length !==
+    expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks)
+  ) {
+    return false;
+  }
+
+  return visibleWeeks.every((week, index) => {
+    const startRow = getAIAnalysisWeeklyBlockStartRow_(index);
+    return (
+      String(sheet.getRange(startRow + 1, 2).getDisplayValue()).trim() ===
+      week.start
+    );
+  });
+}
+
+function doesAIAnalysisDashboardDataMatch_(sheet, summary, visibleWeeks) {
+  if (Number(sheet.getRange('D2').getValue()) !== summary.totalCount) {
+    return false;
+  }
+  if (Number(sheet.getRange('B3').getValue()) !== summary.weeks.length) {
+    return false;
+  }
+  if (
+    Number(sheet.getRange('D3').getValue()) !==
+    summary.excludedFromWeeklyCount
+  ) {
+    return false;
+  }
+  if (!doesAIAnalysisCategorySlotMatch_(sheet, 4, summary.rows, true)) {
+    return false;
+  }
+
+  return visibleWeeks.every((week, index) => {
+    const startRow = getAIAnalysisWeeklyBlockStartRow_(index);
+    return (
+      String(sheet.getRange(startRow + 1, 2).getDisplayValue()).trim() ===
+        week.start &&
+      String(sheet.getRange(startRow + 1, 4).getDisplayValue()).trim() ===
+        week.end &&
+      Number(sheet.getRange(startRow + 2, 2).getValue()) ===
+        week.totalCount &&
+      doesAIAnalysisCategorySlotMatch_(
+        sheet,
+        startRow + 3,
+        week.rows,
+        false,
+      )
+    );
+  });
+}
+
+function doesAIAnalysisCategorySlotMatch_(sheet, headerRow, rows, allowEmpty) {
+  const headers = sheet.getRange(headerRow, 1, 1, 3).getDisplayValues()[0];
   if (
     headers.some(
       (header, index) =>
@@ -292,25 +763,86 @@ function doesAIAnalysisDashboardMatch_(sheet, summary) {
   ) {
     return false;
   }
-  if (Number(sheet.getRange('D2').getValue()) !== summary.totalCount) {
-    return false;
-  }
 
-  if (summary.rows.length === 0) {
+  const values = sheet
+    .getRange(
+      headerRow + 1,
+      1,
+      AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_SLOT_ROWS,
+      3,
+    )
+    .getValues();
+  if (rows.length === 0 && allowEmpty) {
     return (
-      String(sheet.getRange('A5').getDisplayValue()).trim() ===
+      String(values[0][0]).trim() ===
       'No categorized AI Analysis rows found.'
     );
   }
 
-  const existingRows = Math.max(0, sheet.getLastRow() - 4);
-  if (existingRows !== summary.rows.length) {
-    return false;
-  }
-  const values = sheet.getRange(5, 1, existingRows, 2).getDisplayValues();
-  return summary.rows.every(
-    (row, index) =>
-      String(values[index][0]).trim() === row.category &&
-      Number(values[index][1]) === row.count,
+  return values.every((existing, index) => {
+    const expected = rows[index];
+    if (!expected) {
+      return existing.every((value) => String(value).trim() === '');
+    }
+    return (
+      String(existing[0]).trim() === expected.category &&
+      Number(existing[1]) === expected.count &&
+      Math.abs(Number(existing[2]) - expected.percentage) < 0.0000001
+    );
+  });
+}
+
+function expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks) {
+  return (summary.rows.length > 0 ? 1 : 0) + visibleWeeks.length;
+}
+
+function getAIAnalysisWeeklyBlockStartRow_(index) {
+  return (
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_FIRST_ROW +
+    index * AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_BLOCK_HEIGHT
   );
+}
+
+function getAIAnalysisDashboardLastManagedRow_(visibleWeekCount) {
+  if (visibleWeekCount === 0) {
+    return 4 + AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_SLOT_ROWS;
+  }
+  return (
+    getAIAnalysisWeeklyBlockStartRow_(visibleWeekCount - 1) +
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_BLOCK_HEIGHT -
+    1
+  );
+}
+
+function ensureAIAnalysisSheetCapacity_(sheet, requiredRows, requiredColumns) {
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(
+      sheet.getMaxRows(),
+      requiredRows - sheet.getMaxRows(),
+    );
+  }
+  if (sheet.getMaxColumns() < requiredColumns) {
+    sheet.insertColumnsAfter(
+      sheet.getMaxColumns(),
+      requiredColumns - sheet.getMaxColumns(),
+    );
+  }
+}
+
+function buildAIAnalysisDashboardStats_(summary, weeklyStats, dashboardStats) {
+  const visibleWeeklyCharts = Math.min(
+    summary.weeks.length,
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_LIMIT,
+  );
+  return {
+    totalCount: summary.totalCount,
+    distinctCategories: summary.rows.length,
+    historicalWeeks: summary.weeks.length,
+    visibleWeeklyCharts,
+    totalCharts: (summary.rows.length > 0 ? 1 : 0) + visibleWeeklyCharts,
+    excludedFromWeeklyCount: summary.excludedFromWeeklyCount,
+    uncategorizedRows: summary.uncategorizedRows,
+    weeklySummary: weeklyStats,
+    dashboard: dashboardStats,
+  };
 }

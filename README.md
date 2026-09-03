@@ -4,8 +4,9 @@ This project automates the collection and indexing of GoodLeap TPO email
 messages, saves their attachments in Google Drive when present, and enriches
 the archive with the corresponding Artemis Sales Project ID from PostHog. It
 also classifies each archived email and extracts the two tabular datasets from
-Shade Report PDFs through the OpenAI Responses API. A managed `AI Dashboard`
-summarizes Primary Category counts and percentages in a live chart.
+Shade Report PDFs through the OpenAI Responses API. Managed `AI Weekly
+Summary` and `AI Dashboard` sheets preserve the weekly Primary Category
+history and display one all-time chart plus the eight most recent weeks.
 
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
@@ -26,6 +27,7 @@ Integrated trigger (every 5 minutes)
         +--- pending batch each check -> OpenAIAnalysis.gs -> AI Analysis
         |                                      |
         |                                      `-> AIAnalysisDashboard.gs
+        |                                              |-> AI Weekly Summary
         |                                              `-> AI Dashboard
         |
         +--- pending Shade Reports -> OpenAIPdfExtraction.gs
@@ -167,13 +169,20 @@ The deterministic Primary Category reporting workflow.
 
 It:
 
-- Creates and maintains the `AI Dashboard` sheet automatically.
-- Locates `Primary Category` by its header instead of relying on a fixed column.
-- Counts every non-empty Primary Category in `AI Analysis` and sorts the
-  summary from the most frequent category to the least frequent.
-- Writes `Primary Category`, `Count`, and `Percentage` as a managed summary.
-- Builds one embedded column chart without creating duplicate charts.
-- Rewrites the dashboard only when the source counts change.
+- Creates and maintains `AI Weekly Summary` and `AI Dashboard` automatically.
+- Locates `Primary Category` and `Email Received At` by their headers instead
+  of relying on fixed columns.
+- Counts every non-empty Primary Category across all time and by Monday-to-
+  Sunday week in the `America/Bogota` time zone.
+- Preserves every historical weekly aggregate in `AI Weekly Summary`, ordered
+  from the newest week to the oldest.
+- Displays one all-time chart followed by the eight most recent weekly charts,
+  for a maximum of nine charts in `AI Dashboard`.
+- Keeps weekly chart positions fixed. During a visible week, source-range
+  values change without rebuilding charts; chart objects are recreated only
+  when the visible set of weeks or the managed layout changes.
+- Records categorized rows with missing or invalid received dates in the
+  all-time total and reports how many were excluded from weekly aggregation.
 - Does not call OpenAI, Gmail, Drive, or PostHog.
 - Refreshes safely after each automatic OpenAI analysis check through the
   existing five-minute workflow; dashboard errors cannot fail email analysis.
@@ -444,7 +453,7 @@ complete function order is:
 | 9 | `testOpenAIConnection()` | `OpenAIAnalysis.gs` | Verify API authentication, model access, and Structured Outputs |
 | 10 | `previewOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Analyze one email without writing the AI Analysis sheet |
 | 11 | `analyzePendingGoodLeapEmailsWithOpenAI()` | `OpenAIAnalysis.gs` | Write the first bounded historical analysis batch; rerun until pending is zero |
-| 12 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create the Primary Category summary and chart from all existing analysis rows |
+| 12 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create the complete weekly summary plus one all-time and up to eight weekly charts |
 | 13 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
 | 14 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
 | 15 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
@@ -621,9 +630,10 @@ Before installing the schedule, initialize and validate OpenAI:
 7. Investigate every row marked `Error`. After correcting the cause, run
    `retryFailedOpenAIEmailAnalyses()` to retry only failed rows.
 8. Open `AIAnalysisDashboard.gs`, run `previewAIAnalysisDashboard()`, and
-   confirm that the logged category counts match `AI Analysis`.
-9. Run `setupAIAnalysisDashboard()` and confirm that `AI Dashboard` contains
-   one sorted summary table and one Primary Category chart.
+   confirm that the logged all-time and weekly counts match `AI Analysis`.
+9. Run `setupAIAnalysisDashboard()` and confirm that `AI Weekly Summary`
+   contains the complete weekly history and `AI Dashboard` contains one
+   all-time chart followed by up to eight weekly charts, newest first.
 
 Next, initialize and validate Shade Report extraction:
 
@@ -714,15 +724,17 @@ insert, remove, rename, or reorder its managed columns.
 
 No new Script Property or trigger is required.
 
-1. Create `AIAnalysisDashboard.gs` in the same Apps Script project and paste
-   the repository version.
-2. Replace `OpenAIAnalysis.gs` with the repository version so automatic email
-   analysis can call the safe dashboard refresh.
+1. Create or replace `AIAnalysisDashboard.gs` in the same Apps Script project
+   with the repository version.
+2. Confirm that `OpenAIAnalysis.gs` already calls
+   `refreshAIAnalysisDashboardSafely_()` after each analysis batch. Replace it
+   with the repository version only when upgrading from an older installation.
 3. Save the Apps Script project.
 4. Open `AIAnalysisDashboard.gs` and run `previewAIAnalysisDashboard()`.
-   Confirm the logged total and individual category counts.
-5. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Dashboard` is
-   created with the summary table and exactly one chart.
+   Confirm the logged all-time and weekly category counts.
+5. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Weekly Summary`
+   contains every historical week and that `AI Dashboard` contains the
+   all-time chart followed by up to eight weekly charts, newest first.
 6. Optionally delete the manually created `Temporal` sheet after validation;
    the managed dashboard does not read or modify it.
 7. Do not reinstall or manually edit triggers. The existing five-minute
@@ -941,8 +953,11 @@ stop all PostHog calls while keeping Gmail automation, run
   batch of not-yet-analyzed messages and adds one row per Gmail Message ID to
   `AI Analysis`. No API call is made when the pending batch is empty.
 - After each analysis check, `AIAnalysisDashboard.gs` compares the current
-  Primary Category counts with `AI Dashboard`. It rewrites the summary and its
-  single chart only when the counts changed.
+  Primary Category counts and `Email Received At` weeks with both managed
+  reporting sheets. `AI Weekly Summary` keeps the complete weekly history;
+  `AI Dashboard` shows one all-time and up to eight recent weekly charts.
+  Existing chart objects remain in place while only counts change within the
+  same visible weeks.
 - An OpenAI error is written to that message's analysis row and does not block
   the following PostHog synchronization. Failed rows require an explicit
   reviewed retry.
@@ -988,6 +1003,8 @@ The deployment is ready only when all of the following are true:
 - `previewOpenAIEmailAnalysis()` returns a reasonable classification.
 - `AI Analysis` contains one successful row for every intended historical
   Gmail Message ID, with no unexplained `Error` rows.
+- `AI Weekly Summary` contains all Monday-to-Sunday category aggregates, and
+  `AI Dashboard` shows no more than nine charts: one all-time plus eight weekly.
 - `testOpenAIPdfConnection()` passes and does not expose the API key.
 - `previewOpenAIPdfExtraction()` returns all visible Array IDs for a verified
   Shade Report.
