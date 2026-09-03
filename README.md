@@ -4,7 +4,8 @@ This project automates the collection and indexing of GoodLeap TPO email
 messages, saves their attachments in Google Drive when present, and enriches
 the archive with the corresponding Artemis Sales Project ID from PostHog. It
 also classifies each archived email and extracts the two tabular datasets from
-Shade Report PDFs through the OpenAI Responses API.
+Shade Report PDFs through the OpenAI Responses API. A managed `AI Dashboard`
+summarizes Primary Category counts and percentages in a live chart.
 
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
@@ -23,6 +24,9 @@ Integrated trigger (every 5 minutes)
         +-------------------------> Code.gs -> Drive + archive sheets
         |
         +--- pending batch each check -> OpenAIAnalysis.gs -> AI Analysis
+        |                                      |
+        |                                      `-> AIAnalysisDashboard.gs
+        |                                              `-> AI Dashboard
         |
         +--- pending Shade Reports -> OpenAIPdfExtraction.gs
         |                                  |-> PDF Analysis
@@ -157,6 +161,29 @@ The current taxonomy is multi-label and includes `Production`, `Layout`,
 `Equipment`, `Shading / Site Conditions`, `Structure`, `Documentation`,
 `Offset`, `Communication / Follow-up`, and `Other`.
 
+### `AIAnalysisDashboard.gs`
+
+The deterministic Primary Category reporting workflow.
+
+It:
+
+- Creates and maintains the `AI Dashboard` sheet automatically.
+- Locates `Primary Category` by its header instead of relying on a fixed column.
+- Counts every non-empty Primary Category in `AI Analysis` and sorts the
+  summary from the most frequent category to the least frequent.
+- Writes `Primary Category`, `Count`, and `Percentage` as a managed summary.
+- Builds one embedded column chart without creating duplicate charts.
+- Rewrites the dashboard only when the source counts change.
+- Does not call OpenAI, Gmail, Drive, or PostHog.
+- Refreshes safely after each automatic OpenAI analysis check through the
+  existing five-minute workflow; dashboard errors cannot fail email analysis.
+
+Primary functions:
+
+1. `previewAIAnalysisDashboard()`
+2. `setupAIAnalysisDashboard()`
+3. `refreshAIAnalysisDashboard()`
+
 ### `OpenAIPdfExtraction.gs`
 
 The independent Shade Report table-extraction workflow.
@@ -280,6 +307,8 @@ Primary functions:
 2. `testPostHogSolarTableConnection()`
 3. `previewPostHogSolarTableSync()`
 4. `syncPostHogSolarTables()`
+5. `previewPdfAnalysisComparisonCounts()`
+6. `backfillPdfAnalysisComparisonCounts()`
 
 ## Script Properties
 
@@ -415,16 +444,17 @@ complete function order is:
 | 9 | `testOpenAIConnection()` | `OpenAIAnalysis.gs` | Verify API authentication, model access, and Structured Outputs |
 | 10 | `previewOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Analyze one email without writing the AI Analysis sheet |
 | 11 | `analyzePendingGoodLeapEmailsWithOpenAI()` | `OpenAIAnalysis.gs` | Write the first bounded historical analysis batch; rerun until pending is zero |
-| 12 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
-| 13 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
-| 14 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
-| 15 | `previewOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Extract one complete PDF without writing a row or CSV files |
-| 16 | `extractPendingShadeReportPdfsWithOpenAI()` | `OpenAIPdfExtraction.gs` | Write one bounded historical PDF batch; rerun until pendingPdfs is zero |
-| 17 | `setupPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Upgrade PDF Analysis and validate deterministic solar-table settings |
-| 18 | `testPostHogSolarTableConnection()` | `PostHogSolarTables.gs` | Verify both GoodLeap and Sales project/panel schemas |
-| 19 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
-| 20 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
-| 21 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 12 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create the Primary Category summary and chart from all existing analysis rows |
+| 13 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
+| 14 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
+| 15 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
+| 16 | `previewOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Extract one complete PDF without writing a row or CSV files |
+| 17 | `extractPendingShadeReportPdfsWithOpenAI()` | `OpenAIPdfExtraction.gs` | Write one bounded historical PDF batch; rerun until pendingPdfs is zero |
+| 18 | `setupPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Upgrade PDF Analysis and validate deterministic solar-table settings |
+| 19 | `testPostHogSolarTableConnection()` | `PostHogSolarTables.gs` | Verify both GoodLeap and Sales project/panel schemas |
+| 20 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
+| 21 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
+| 22 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -442,13 +472,15 @@ steps for every new deployment.
 Create a standalone Google Apps Script project and set its time zone to
 `America/Bogota`.
 
-Add five script files to the same project:
+Add seven script files to the same project:
 
 - `Code.gs`
 - `ManualBackfill.gs`
 - `PostHogSync.gs`
 - `OpenAIAnalysis.gs`
+- `AIAnalysisDashboard.gs`
 - `OpenAIPdfExtraction.gs`
+- `PostHogSolarTables.gs`
 
 `README.md` is repository documentation and does not need to be pasted into
 the Apps Script editor.
@@ -588,6 +620,10 @@ Before installing the schedule, initialize and validate OpenAI:
    log reports `pendingMessages: 0`.
 7. Investigate every row marked `Error`. After correcting the cause, run
    `retryFailedOpenAIEmailAnalyses()` to retry only failed rows.
+8. Open `AIAnalysisDashboard.gs`, run `previewAIAnalysisDashboard()`, and
+   confirm that the logged category counts match `AI Analysis`.
+9. Run `setupAIAnalysisDashboard()` and confirm that `AI Dashboard` contains
+   one sorted summary table and one Primary Category chart.
 
 Next, initialize and validate Shade Report extraction:
 
@@ -674,6 +710,26 @@ by Gmail Message ID rather than Application ID, so several emails for the same
 project preserve their own categories, status, reasons, and summary. Do not
 insert, remove, rename, or reorder its managed columns.
 
+### Adding AI Dashboard to an existing installation
+
+No new Script Property or trigger is required.
+
+1. Create `AIAnalysisDashboard.gs` in the same Apps Script project and paste
+   the repository version.
+2. Replace `OpenAIAnalysis.gs` with the repository version so automatic email
+   analysis can call the safe dashboard refresh.
+3. Save the Apps Script project.
+4. Open `AIAnalysisDashboard.gs` and run `previewAIAnalysisDashboard()`.
+   Confirm the logged total and individual category counts.
+5. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Dashboard` is
+   created with the summary table and exactly one chart.
+6. Optionally delete the manually created `Temporal` sheet after validation;
+   the managed dashboard does not read or modify it.
+7. Do not reinstall or manually edit triggers. The existing five-minute
+   coordinator reaches the refresh through `OpenAIAnalysis.gs`.
+8. To rebuild the dashboard manually later, run
+   `refreshAIAnalysisDashboard()`.
+
 ### Adding Shade Report PDF extraction to an existing installation
 
 An installation that already has the integrated five-minute trigger does not
@@ -719,10 +775,15 @@ No Sheet columns or triggers need to be created manually.
 5. Run `previewPostHogSolarTableSync()` and verify at least one known Project
    ID, data source, and active array count.
 6. Run `syncPostHogSolarTables()` once for the historical backfill.
-7. Open both new project CSV links and compare them with the corresponding PDF
+7. Run `previewPdfAnalysisComparisonCounts()` to verify the PDF and project
+   panel/array totals read from existing Drive CSVs without writing the Sheet.
+8. Run `backfillPdfAnalysisComparisonCounts()` once. This makes no PostHog or
+   OpenAI request and fills `PDF Panel Count`, `Project Panel Count`,
+   `PDF Array Count`, and `Project Array Count` before the final `Error` column.
+9. Open both new project CSV links and compare them with the corresponding PDF
    CSVs. Native project segment IDs may differ from the PDF's presentation IDs,
    and genuine differences can reflect a newer cloud design revision.
-8. Do not add or replace triggers. The existing five-minute coordinator and
+10. Do not add or replace triggers. The existing five-minute coordinator and
    hourly PostHog reconciliation automatically invoke the new workflow.
 
 ### Adding Project ID to existing AI Analysis and PDF Analysis sheets
@@ -879,6 +940,9 @@ stop all PostHog calls while keeping Gmail automation, run
 - After each successful Gmail check, `OpenAIAnalysis.gs` classifies a bounded
   batch of not-yet-analyzed messages and adds one row per Gmail Message ID to
   `AI Analysis`. No API call is made when the pending batch is empty.
+- After each analysis check, `AIAnalysisDashboard.gs` compares the current
+  Primary Category counts with `AI Dashboard`. It rewrites the summary and its
+  single chart only when the counts changed.
 - An OpenAI error is written to that message's analysis row and does not block
   the following PostHog synchronization. Failed rows require an explicit
   reviewed retry.
@@ -901,6 +965,11 @@ stop all PostHog calls while keeping Gmail automation, run
   project-side Summary and Monthly CSVs from structured PostHog data. GoodLeap
   is queried first and Artemis Sales is the fallback. The CSVs are stored in
   the same project Drive folder as the Shade Report.
+- New PDF rows store total PDF panel and array counts directly from the
+  structured extraction. Project synchronization stores the corresponding
+  active project panel and array counts directly from PostHog data. Historical
+  rows can be populated from their existing Drive CSVs without another API
+  request.
 - Both workflows use the same Apps Script lock, preventing overlapping writes.
 - Empty Gmail checks do not create PostHog requests.
 - The PostHog sync sends Application IDs only; it does not send email bodies,
@@ -927,6 +996,8 @@ The deployment is ready only when all of the following are true:
 - `testPostHogSolarTableConnection()` passes for GoodLeap and Artemis Sales,
   and `PDF Analysis` links to valid project-side Summary and Monthly CSVs with
   an explained `Project Data Status`.
+- `PDF Analysis` shows PDF and project panel/array totals before `Error`, and
+  the values equal the non-weighted rows in the corresponding Summary CSVs.
 - `AI Analysis` and `PDF Analysis` contain the same Project ID shown for their
   Application ID in `PostHog Projects`, or remain blank when it is `Not Found`.
 - The **Triggers** page shows one
@@ -944,7 +1015,7 @@ new source record can remain temporarily unavailable in PostHog.
 
 1. Confirm that the target account receives the group messages in Gmail and
    can access the intended PostHog environment.
-2. Copy the six `.gs` files into a new standalone Apps Script project.
+2. Copy the seven `.gs` files into a new standalone Apps Script project.
 3. Review the Gmail query, historical start date, and time zone.
 4. Obtain a new purpose-specific PostHog Personal API Key; do not reuse another
    person's key.
@@ -954,15 +1025,16 @@ new source record can remain temporarily unavailable in PostHog.
 7. Run the PostHog setup, connection test, preview, and first synchronization.
 8. Run the OpenAI email setup, connection test, preview, and bounded historical
    analysis.
-9. Run the OpenAI PDF setup, connection test, candidate preview, extraction
+9. Run the AI Dashboard preview and setup functions.
+10. Run the OpenAI PDF setup, connection test, candidate preview, extraction
    preview, and bounded historical extraction. Review both generated CSVs.
-10. Run the PostHog solar-table setup, connection test, preview, and historical
+11. Run the PostHog solar-table setup, connection test, preview, and historical
     synchronization. Review both project-side CSVs.
-11. Use the schema inspection functions only if the default mapping fails in
+12. Use the schema inspection functions only if the default mapping fails in
    the target environment.
-12. After all workflows have been validated, run
+13. After all workflows have been validated, run
    `installHybridGoodLeapPostHogTriggers()`.
-13. Confirm that exactly one integrated five-minute trigger and one hourly
+14. Confirm that exactly one integrated five-minute trigger and one hourly
    PostHog trigger exist.
 
 All Drive folders, Sheets tabs, Gmail labels, and time-based triggers are

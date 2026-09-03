@@ -19,6 +19,8 @@
  *   2) testPostHogSolarTableConnection()
  *   3) previewPostHogSolarTableSync()
  *   4) syncPostHogSolarTables()
+ *   5) previewPdfAnalysisComparisonCounts()
+ *   6) backfillPdfAnalysisComparisonCounts()
  */
 
 const POSTHOG_SOLAR_CONFIG = {
@@ -182,7 +184,8 @@ function previewPostHogSolarTableSync() {
     matched += 1;
     console.log(
       `[MATCH] ${candidate.applicationId} | ${candidate.projectId} | ` +
-      `${record.source} | arrays=${tables.summaryRows.length}`,
+      `${record.source} | arrays=${tables.arrayCount} | ` +
+      `panels=${tables.panelCount}`,
     );
     if (tables.notes.length > 0) {
       console.log(`[REVIEW] ${tables.notes.join(' ')}`);
@@ -192,6 +195,289 @@ function previewPostHogSolarTableSync() {
   const stats = {previewed: candidates.length, matched, notFound};
   console.log(JSON.stringify(stats, null, 2));
   return stats;
+}
+
+/**
+ * Reads a small sample of the existing PDF and project Summary CSV files and
+ * logs their panel and array totals. It does not query PostHog or OpenAI and
+ * does not write Sheet values.
+ */
+function previewPdfAnalysisComparisonCounts() {
+  const resources = getOrCreateResources_();
+  const sheet = resources.spreadsheet.getSheetByName(
+    POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+  );
+  if (!sheet) {
+    throw new Error(
+      'PDF Analysis does not exist. Run setupPostHogSolarTableSync() first.',
+    );
+  }
+  const candidates = loadPdfAnalysisComparisonCandidates_(sheet)
+    .filter((candidate) => candidate.pdfSummaryUrl || candidate.projectSummaryUrl)
+    .slice(0, POSTHOG_SOLAR_CONFIG.PREVIEW_LIMIT);
+  const cache = new Map();
+  const stats = {previewed: candidates.length, complete: 0, partial: 0, errors: 0};
+
+  candidates.forEach((candidate) => {
+    const counts = calculatePdfAnalysisComparisonCounts_(candidate, cache);
+    if (counts.errors.length > 0) {
+      stats.errors += counts.errors.length;
+      console.warn(
+        `[COUNT REVIEW] ${candidate.applicationId} | ${counts.errors.join(' ')}`,
+      );
+    }
+    const complete = Boolean(counts.pdf && counts.project);
+    if (complete) {
+      stats.complete += 1;
+    } else {
+      stats.partial += 1;
+    }
+    console.log(
+      `[COUNT] ${candidate.applicationId} | ` +
+      `PDF panels=${formatPdfAnalysisCountLog_(counts.pdf, 'panelCount')} ` +
+      `arrays=${formatPdfAnalysisCountLog_(counts.pdf, 'arrayCount')} | ` +
+      `Project panels=${formatPdfAnalysisCountLog_(counts.project, 'panelCount')} ` +
+      `arrays=${formatPdfAnalysisCountLog_(counts.project, 'arrayCount')}`,
+    );
+  });
+
+  console.log(JSON.stringify(stats, null, 2));
+  return stats;
+}
+
+/**
+ * Historical backfill for the four at-a-glance comparison counts. Existing
+ * CSV files in Drive are the source, so this function makes no PostHog or
+ * OpenAI request. Missing or unreadable CSVs preserve any existing count.
+ */
+function backfillPdfAnalysisComparisonCounts() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    console.log(
+      'Another GoodLeap execution is running. Count backfill was skipped safely.',
+    );
+    return {skippedBecauseLocked: true};
+  }
+  try {
+    const resources = getOrCreateResources_();
+    const sheet = getOrCreateOpenAIPdfSheet_(resources.spreadsheet);
+    if (sheet.getLastRow() < 2) {
+      console.log('PDF Analysis has no data rows to backfill.');
+      return {rows: 0, pdfUpdated: 0, projectUpdated: 0, errors: 0};
+    }
+    const candidates = loadPdfAnalysisComparisonCandidates_(sheet);
+    const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getDisplayValues()[0]
+      .map((value) => String(value).trim());
+    const pdfPanelIndex = requireSheetHeaderIndex_(
+      headers,
+      'PDF Panel Count',
+      POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+    );
+    const projectPanelIndex = requireSheetHeaderIndex_(
+      headers,
+      'Project Panel Count',
+      POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+    );
+    const pdfArrayIndex = requireSheetHeaderIndex_(
+      headers,
+      'PDF Array Count',
+      POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+    );
+    const projectArrayIndex = requireSheetHeaderIndex_(
+      headers,
+      'Project Array Count',
+      POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+    );
+    const expectedIndexes = [
+      pdfPanelIndex,
+      projectPanelIndex,
+      pdfArrayIndex,
+      projectArrayIndex,
+    ];
+    expectedIndexes.forEach((index, offset) => {
+      if (index !== pdfPanelIndex + offset) {
+        throw new Error('PDF Analysis comparison count columns are not contiguous.');
+      }
+    });
+
+    const output = sheet
+      .getRange(2, pdfPanelIndex + 1, sheet.getLastRow() - 1, 4)
+      .getValues();
+    const cache = new Map();
+    const stats = {
+      rows: candidates.length,
+      pdfUpdated: 0,
+      projectUpdated: 0,
+      usedExistingPdfArrayCount: 0,
+      errors: 0,
+    };
+
+    candidates.forEach((candidate) => {
+      const rowOffset = candidate.rowNumber - 2;
+      const counts = calculatePdfAnalysisComparisonCounts_(candidate, cache);
+      if (counts.pdf) {
+        output[rowOffset][0] = counts.pdf.panelCount;
+        output[rowOffset][2] = counts.pdf.arrayCount;
+        stats.pdfUpdated += 1;
+      } else if (Number.isFinite(candidate.existingSummaryArrayCount)) {
+        output[rowOffset][2] = candidate.existingSummaryArrayCount;
+        stats.usedExistingPdfArrayCount += 1;
+      }
+      if (counts.project) {
+        output[rowOffset][1] = counts.project.panelCount;
+        output[rowOffset][3] = counts.project.arrayCount;
+        stats.projectUpdated += 1;
+      }
+      if (counts.errors.length > 0) {
+        stats.errors += counts.errors.length;
+        console.warn(
+          `[COUNT BACKFILL REVIEW] ${candidate.applicationId} | ` +
+          counts.errors.join(' '),
+        );
+      }
+    });
+
+    sheet
+      .getRange(2, pdfPanelIndex + 1, output.length, 4)
+      .setValues(output);
+    SpreadsheetApp.flush();
+    console.log(JSON.stringify(stats, null, 2));
+    return stats;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function loadPdfAnalysisComparisonCandidates_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) {
+    return [];
+  }
+  const values = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const applicationIdIndex = requireSheetHeaderIndex_(
+    headers,
+    'Application ID',
+    POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+  );
+  const pdfSummaryIndex = requireSheetHeaderIndex_(
+    headers,
+    'PDF Summary CSV URL',
+    POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+  );
+  const projectSummaryIndex = requireSheetHeaderIndex_(
+    headers,
+    'Project Summary CSV URL',
+    POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+  );
+  const existingSummaryArrayIndex = requireSheetHeaderIndex_(
+    headers,
+    'Summary Array Count',
+    POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+  );
+
+  return values.slice(1).map((row, offset) => {
+    const existingArrayCount = Number(row[existingSummaryArrayIndex]);
+    return {
+      rowNumber: offset + 2,
+      applicationId: String(row[applicationIdIndex] || '').trim(),
+      pdfSummaryUrl: String(row[pdfSummaryIndex] || '').trim(),
+      projectSummaryUrl: String(row[projectSummaryIndex] || '').trim(),
+      existingSummaryArrayCount: Number.isFinite(existingArrayCount)
+        ? existingArrayCount
+        : null,
+    };
+  });
+}
+
+function calculatePdfAnalysisComparisonCounts_(candidate, cache) {
+  const result = {pdf: null, project: null, errors: []};
+  [
+    ['pdf', 'PDF', candidate.pdfSummaryUrl],
+    ['project', 'Project', candidate.projectSummaryUrl],
+  ].forEach(([key, label, url]) => {
+    if (!url) {
+      return;
+    }
+    try {
+      result[key] = readPdfAnalysisSummaryCounts_(url, cache);
+    } catch (error) {
+      result.errors.push(`${label} Summary CSV: ${String(error)}`);
+    }
+  });
+  return result;
+}
+
+function readPdfAnalysisSummaryCounts_(url, cache) {
+  if (cache.has(url)) {
+    const cached = cache.get(url);
+    if (cached.error) {
+      throw new Error(cached.error);
+    }
+    return cached.counts;
+  }
+  try {
+    const fileId = extractPdfAnalysisDriveFileId_(url);
+    const csv = DriveApp.getFileById(fileId)
+      .getBlob()
+      .getDataAsString('UTF-8');
+    const rows = Utilities.parseCsv(csv);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new Error('The CSV is empty.');
+    }
+    const headers = rows[0].map((value) =>
+      String(value || '').replace(/^\uFEFF/, '').trim().toLowerCase(),
+    );
+    const arrayIdIndex = headers.indexOf('array id');
+    const panelCountIndex = headers.indexOf('panel count');
+    if (arrayIdIndex < 0 || panelCountIndex < 0) {
+      throw new Error('Array ID or Panel Count header was not found.');
+    }
+    let panelCount = 0;
+    let arrayCount = 0;
+    rows.slice(1).forEach((row) => {
+      const arrayId = String(row[arrayIdIndex] || '').trim();
+      if (!arrayId || /weighted\s+average/i.test(arrayId)) {
+        return;
+      }
+      const numericText = String(row[panelCountIndex] || '')
+        .replace(/,/g, '')
+        .trim();
+      const panels = Number(numericText);
+      if (!Number.isFinite(panels) || panels < 0) {
+        throw new Error(`Invalid Panel Count for Array ID ${arrayId}.`);
+      }
+      panelCount += panels;
+      arrayCount += 1;
+    });
+    const counts = {panelCount, arrayCount};
+    cache.set(url, {counts});
+    return counts;
+  } catch (error) {
+    const message = String(error);
+    cache.set(url, {error: message});
+    throw new Error(message);
+  }
+}
+
+function extractPdfAnalysisDriveFileId_(url) {
+  const text = String(url || '').trim();
+  const hyperlinkMatch = text.match(/^=HYPERLINK\("([^"]+)"/i);
+  const candidate = hyperlinkMatch ? hyperlinkMatch[1] : text;
+  const decoded = decodeURIComponent(candidate);
+  const match = decoded.match(/\/d\/([A-Za-z0-9_-]{20,})/) ||
+    decoded.match(/[?&]id=([A-Za-z0-9_-]{20,})/);
+  if (!match) {
+    throw new Error('A Google Drive file ID could not be read from the URL.');
+  }
+  return match[1];
+}
+
+function formatPdfAnalysisCountLog_(counts, key) {
+  return counts && Number.isFinite(counts[key]) ? counts[key] : '[BLANK]';
 }
 
 /**
@@ -269,6 +555,16 @@ function syncPostHogSolarTablesForResources_(resources) {
       'Project Data Error',
       POSTHOG_SOLAR_CONFIG.SHEET_NAME,
     ),
+    projectPanelCount: requireSheetHeaderIndex_(
+      headers,
+      'Project Panel Count',
+      POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+    ),
+    projectArrayCount: requireSheetHeaderIndex_(
+      headers,
+      'Project Array Count',
+      POSTHOG_SOLAR_CONFIG.SHEET_NAME,
+    ),
   };
   const stats = {
     rows: candidates.length,
@@ -293,6 +589,8 @@ function syncPostHogSolarTablesForResources_(resources) {
         syncedAt,
         status: 'Not Found',
         error: '',
+        projectPanelCount: '',
+        projectArrayCount: '',
       });
       return;
     }
@@ -308,6 +606,8 @@ function syncPostHogSolarTablesForResources_(resources) {
           syncedAt,
           status: 'Incomplete',
           error: tables.notes.join(' ') || 'No active solar arrays were found.',
+          projectPanelCount: 0,
+          projectArrayCount: 0,
         });
         return;
       }
@@ -330,6 +630,8 @@ function syncPostHogSolarTablesForResources_(resources) {
         syncedAt,
         status: incomplete ? 'Incomplete' : 'Matched',
         error: tables.notes.join(' '),
+        projectPanelCount: tables.panelCount,
+        projectArrayCount: tables.arrayCount,
       });
     } catch (error) {
       stats.errors += 1;
@@ -342,6 +644,8 @@ function syncPostHogSolarTablesForResources_(resources) {
         syncedAt,
         status: 'Error',
         error: safeError,
+        projectPanelCount: row[outputIndex.projectPanelCount] || '',
+        projectArrayCount: row[outputIndex.projectArrayCount] || '',
       });
       console.error(
         `[PROJECT SOLAR ERROR] ${candidate.projectId} | ${safeError}`,
@@ -728,7 +1032,18 @@ function buildPostHogSolarTables_(record) {
     };
   });
   const weighted = calculatePostHogSolarWeightedAverages_(summaryRows);
-  return {summaryRows, monthlyRows, weighted, notes: Array.from(new Set(notes))};
+  const panelCount = summaryRows.reduce(
+    (sum, row) => sum + Math.max(Number(row.panelCount) || 0, 0),
+    0,
+  );
+  return {
+    summaryRows,
+    monthlyRows,
+    weighted,
+    panelCount,
+    arrayCount: summaryRows.length,
+    notes: Array.from(new Set(notes)),
+  };
 }
 
 function comparePostHogSolarArrayIds_(left, right) {
@@ -877,4 +1192,6 @@ function setPostHogSolarOutputValues_(row, index, output) {
   row[index.syncedAt] = output.syncedAt || new Date();
   row[index.status] = safeCellValue_(output.status || '');
   row[index.error] = safeCellValue_(output.error || '');
+  row[index.projectPanelCount] = safeCellValue_(output.projectPanelCount);
+  row[index.projectArrayCount] = safeCellValue_(output.projectArrayCount);
 }

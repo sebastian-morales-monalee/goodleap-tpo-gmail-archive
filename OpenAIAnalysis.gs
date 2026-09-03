@@ -367,6 +367,9 @@ function processOpenAIEmailAnalysisBatch_(options) {
     });
 
     SpreadsheetApp.flush();
+    if (typeof refreshAIAnalysisDashboardSafely_ === 'function') {
+      stats.dashboard = refreshAIAnalysisDashboardSafely_();
+    }
     console.log(JSON.stringify(stats, null, 2));
     return stats;
   } finally {

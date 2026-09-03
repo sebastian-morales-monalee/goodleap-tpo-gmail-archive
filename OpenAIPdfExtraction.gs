@@ -45,6 +45,13 @@ const OPENAI_PDF_PROPERTY_KEYS = {
   MAX_FILE_BYTES: 'OPENAI_PDF_MAX_FILE_BYTES',
 };
 
+const OPENAI_PDF_COMPARISON_HEADERS = [
+  'PDF Panel Count',
+  'Project Panel Count',
+  'PDF Array Count',
+  'Project Array Count',
+];
+
 const OPENAI_PDF_HEADERS = [
   'Source Drive File ID',
   'Project ID',
@@ -74,6 +81,7 @@ const OPENAI_PDF_HEADERS = [
   'Model',
   'OpenAI Response ID',
   'Extraction Status',
+  ...OPENAI_PDF_COMPARISON_HEADERS,
   'Error',
 ];
 
@@ -127,6 +135,10 @@ const LEGACY_OPENAI_PDF_HEADERS_V2 = [
   'Extraction Status',
   'Error',
 ];
+
+const LEGACY_OPENAI_PDF_HEADERS_V3 = OPENAI_PDF_HEADERS.filter(
+  (header) => !OPENAI_PDF_COMPARISON_HEADERS.includes(header),
+);
 
 const OPENAI_PDF_ATTACHMENT_REQUIRED_HEADERS = [
   'Processed At',
@@ -535,11 +547,12 @@ function getOrCreateOpenAIPdfSheet_(spreadsheet) {
   sheet.setColumnWidth(20, 150);
   sheet.setColumnWidth(21, 420);
   sheet.setColumnWidth(24, 520);
-  sheet.setColumnWidth(29, 420);
+  sheet.setColumnWidths(29, 4, 145);
+  sheet.setColumnWidth(33, 420);
   sheet.getRange('K:K').setWrap(true);
   sheet.getRange('U:U').setWrap(true);
   sheet.getRange('X:X').setWrap(true);
-  sheet.getRange('AC:AC').setWrap(true);
+  sheet.getRange('AG:AG').setWrap(true);
   return sheet;
 }
 
@@ -563,7 +576,10 @@ function migrateOpenAIPdfSheetSchema_(spreadsheet) {
   const isLegacyV2 = LEGACY_OPENAI_PDF_HEADERS_V2.every(
     (header, index) => headers[index] === header,
   );
-  if (!isLegacyV1 && !isLegacyV2) {
+  const isLegacyV3 = LEGACY_OPENAI_PDF_HEADERS_V3.every(
+    (header, index) => headers[index] === header,
+  );
+  if (!isLegacyV1 && !isLegacyV2 && !isLegacyV3) {
     return;
   }
 
@@ -572,16 +588,24 @@ function migrateOpenAIPdfSheetSchema_(spreadsheet) {
     formatAnalysisHeaderCell_(sheet.getRange(1, 2), 'Project ID');
   }
 
-  // Preserve the two PDF-derived links, label their source explicitly, and
-  // insert the project-derived fields immediately after them.
-  sheet.getRange(1, 14).setValue('PDF Summary CSV URL');
-  sheet.getRange(1, 15).setValue('PDF Monthly CSV URL');
-  sheet.insertColumnsBefore(16, 6);
-  OPENAI_PDF_HEADERS.slice(15, 21).forEach((header, offset) => {
-    formatAnalysisHeaderCell_(sheet.getRange(1, 16 + offset), header);
+  if (!isLegacyV3) {
+    // Preserve the two PDF-derived links, label their source explicitly, and
+    // insert the project-derived fields immediately after them.
+    sheet.getRange(1, 14).setValue('PDF Summary CSV URL');
+    sheet.getRange(1, 15).setValue('PDF Monthly CSV URL');
+    sheet.insertColumnsBefore(16, 6);
+    OPENAI_PDF_HEADERS.slice(15, 21).forEach((header, offset) => {
+      formatAnalysisHeaderCell_(sheet.getRange(1, 16 + offset), header);
+    });
+  }
+
+  // Add the four at-a-glance comparison metrics immediately before Error.
+  sheet.insertColumnsBefore(29, OPENAI_PDF_COMPARISON_HEADERS.length);
+  OPENAI_PDF_COMPARISON_HEADERS.forEach((header, offset) => {
+    formatAnalysisHeaderCell_(sheet.getRange(1, 29 + offset), header);
   });
   console.log(
-    'PDF Analysis schema upgraded with project-derived solar table fields.',
+    'PDF Analysis schema upgraded with PDF and project comparison counts.',
   );
 }
 
@@ -1186,6 +1210,17 @@ function buildOpenAIPdfTrackingRow_(
 ) {
   const value = extraction || {};
   const sourcePages = value.source_pages || {};
+  const summaryRows = Array.isArray(value.summary_rows)
+    ? value.summary_rows
+    : [];
+  const isExtracted = status === 'Extracted';
+  const pdfPanelCount = isExtracted
+    ? summaryRows.reduce(
+        (sum, row) => sum + Math.max(Number(row.panel_count) || 0, 0),
+        0,
+      )
+    : '';
+  const pdfArrayCount = isExtracted ? summaryRows.length : '';
   return [
     candidate.driveFileId,
     candidate.projectId || '',
@@ -1198,7 +1233,7 @@ function buildOpenAIPdfTrackingRow_(
     candidate.sizeBytes,
     candidate.duplicateCount || 0,
     (candidate.duplicateFilenames || []).join('\n'),
-    Array.isArray(value.summary_rows) ? value.summary_rows.length : 0,
+    summaryRows.length,
     Array.isArray(value.monthly_rows) ? value.monthly_rows.length : 0,
     csvFiles.summaryUrl || '',
     csvFiles.monthlyUrl || '',
@@ -1217,6 +1252,10 @@ function buildOpenAIPdfTrackingRow_(
     model,
     responseId,
     status,
+    pdfPanelCount,
+    '',
+    pdfArrayCount,
+    '',
     error,
   ].map(safeCellValue_);
 }
