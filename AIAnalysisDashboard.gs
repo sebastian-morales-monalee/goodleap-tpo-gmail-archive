@@ -3,9 +3,9 @@
  *
  * This file belongs in the SAME Apps Script project as OpenAIAnalysis.gs. It
  * reads "AI Analysis", maintains the complete weekly history in
- * "AI Weekly Summary", and shows one all-time chart plus the eight most recent
- * weekly charts in "AI Dashboard". It does not call OpenAI, Gmail, Drive, or
- * PostHog.
+ * "AI Weekly Summary", and shows one all-time chart, one stacked weekly trend,
+ * plus the eight most recent weekly charts in "AI Dashboard". It does not call
+ * OpenAI, Gmail, Drive, or PostHog.
  *
  * Safe first-run sequence:
  *   1) previewAIAnalysisDashboard()
@@ -30,6 +30,38 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
     'Percentage',
     'Week Total',
   ],
+  CATEGORY_ORDER: [
+    'Production',
+    'Layout',
+    'Equipment',
+    'Shading / Site Conditions',
+    'Structure',
+    'Documentation',
+    'Offset',
+    'Communication / Follow-up',
+    'Other',
+  ],
+  CATEGORY_COLORS: {
+    Production: '#4285f4',
+    Layout: '#fb8c00',
+    Equipment: '#34a853',
+    'Shading / Site Conditions': '#fbbc04',
+    Structure: '#8e24aa',
+    Documentation: '#00acc1',
+    Offset: '#ea4335',
+    'Communication / Follow-up': '#5c6bc0',
+    Other: '#9aa0a6',
+  },
+  FALLBACK_CATEGORY_COLORS: [
+    '#00897b',
+    '#d81b60',
+    '#7cb342',
+    '#6d4c41',
+    '#3949ab',
+    '#f4511e',
+  ],
+  WEEKLY_MATRIX_TITLE: 'Weekly Category Matrix',
+  WEEKLY_MATRIX_START_COLUMN: 8,
   TITLE: 'AI Analysis - Primary Category Dashboard',
   TIME_ZONE: 'America/Bogota',
   WEEKLY_CHART_LIMIT: 8,
@@ -37,7 +69,9 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   WEEKLY_FIRST_ROW: 32,
   WEEKLY_BLOCK_HEIGHT: 28,
   CHART_COLUMN: 5,
-  LAYOUT_NOTE: 'Managed AI Dashboard layout v2: all-time plus eight weekly charts.',
+  STACKED_CHART_COLUMN: 15,
+  LAYOUT_NOTE:
+    'Managed AI Dashboard layout v3: all-time, stacked trend, and eight weekly charts.',
   HEADER_COLOR: '#6e04bd',
   HEADER_TEXT_COLOR: '#ffffff',
   CHART_COLOR: '#4285f4',
@@ -359,6 +393,40 @@ function buildAIWeeklySummaryOutput_(summary) {
   return output;
 }
 
+function getAIWeeklyMatrixCategories_(summary) {
+  const observedCategories = new Set(
+    summary.rows.map((row) => row.category),
+  );
+  const configuredCategories =
+    AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_ORDER.slice();
+  const configuredSet = new Set(configuredCategories);
+  const additionalCategories = Array.from(observedCategories)
+    .filter((category) => !configuredSet.has(category))
+    .sort((left, right) => left.localeCompare(right));
+  return configuredCategories.concat(additionalCategories);
+}
+
+function buildAIWeeklyMatrix_(summary) {
+  const categories = getAIWeeklyMatrixCategories_(summary);
+  const headers = ['Week'].concat(categories, ['Total']);
+  const rows = summary.weeks
+    .slice()
+    .reverse()
+    .map((week) => {
+      const countsByCategory = new Map(
+        week.rows.map((row) => [row.category, row.count]),
+      );
+      return [
+        `${week.start} to ${week.end}`,
+        ...categories.map(
+          (category) => Number(countsByCategory.get(category) || 0),
+        ),
+        week.totalCount,
+      ];
+    });
+  return {categories, headers, rows};
+}
+
 function writeAIWeeklySummary_(spreadsheet, summary, force) {
   let sheet = spreadsheet.getSheetByName(
     AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME,
@@ -371,18 +439,32 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
   }
 
   const output = buildAIWeeklySummaryOutput_(summary);
-  if (!force && doesAIWeeklySummaryMatch_(sheet, output)) {
+  const matrix = buildAIWeeklyMatrix_(summary);
+  if (!force && doesAIWeeklySummaryMatch_(sheet, output, matrix)) {
     return {
       sheet: sheet.getName(),
       updated: false,
       unchanged: true,
       rows: output.length,
       historicalWeeks: summary.weeks.length,
+      matrixRows: matrix.rows.length,
+      matrixCategories: matrix.categories.length,
     };
   }
 
+  if (sheet.getLastRow() > 0 && sheet.getLastColumn() > 0) {
+    sheet.getDataRange().breakApart();
+  }
   sheet.clear();
-  ensureAIAnalysisSheetCapacity_(sheet, output.length + 1, 6);
+  const matrixLastColumn =
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_START_COLUMN +
+    matrix.headers.length -
+    1;
+  ensureAIAnalysisSheetCapacity_(
+    sheet,
+    Math.max(output.length + 2, matrix.rows.length + 3),
+    matrixLastColumn + 1,
+  );
   sheet.setHiddenGridlines(false);
   sheet.setFrozenRows(1);
   sheet
@@ -405,22 +487,66 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
     sheet.getRange(2, 6, output.length, 1).setNumberFormat('0');
   }
 
+  const matrixStartColumn =
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_START_COLUMN;
+  sheet
+    .getRange(1, matrixStartColumn, 1, matrix.headers.length)
+    .merge()
+    .setValue(AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_TITLE)
+    .setFontWeight('bold')
+    .setBackground(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_COLOR)
+    .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR)
+    .setHorizontalAlignment('center');
+  sheet
+    .getRange(2, matrixStartColumn, 1, matrix.headers.length)
+    .setValues([matrix.headers])
+    .setFontWeight('bold')
+    .setBackground(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_COLOR)
+    .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR);
+  if (matrix.rows.length > 0) {
+    sheet
+      .getRange(3, matrixStartColumn, matrix.rows.length, matrix.headers.length)
+      .setValues(matrix.rows);
+    sheet
+      .getRange(
+        3,
+        matrixStartColumn + 1,
+        matrix.rows.length,
+        matrix.headers.length - 1,
+      )
+      .setNumberFormat('0');
+  }
+
   sheet.setColumnWidth(1, 120);
   sheet.setColumnWidth(2, 120);
   sheet.setColumnWidth(3, 240);
   sheet.setColumnWidth(4, 100);
   sheet.setColumnWidth(5, 120);
   sheet.setColumnWidth(6, 110);
+  sheet.setColumnWidth(matrixStartColumn, 220);
+  sheet.setColumnWidths(
+    matrixStartColumn + 1,
+    matrix.headers.length - 2,
+    145,
+  );
+  matrix.categories.forEach((category, index) => {
+    if (category.length > 18) {
+      sheet.setColumnWidth(matrixStartColumn + index + 1, 220);
+    }
+  });
+  sheet.setColumnWidth(matrixLastColumn, 100);
   return {
     sheet: sheet.getName(),
     updated: true,
     unchanged: false,
     rows: output.length,
     historicalWeeks: summary.weeks.length,
+    matrixRows: matrix.rows.length,
+    matrixCategories: matrix.categories.length,
   };
 }
 
-function doesAIWeeklySummaryMatch_(sheet, output) {
+function doesAIWeeklySummaryMatch_(sheet, output, matrix) {
   if (sheet.getLastRow() < 1 || sheet.getLastColumn() < 6) {
     return false;
   }
@@ -434,23 +560,87 @@ function doesAIWeeklySummaryMatch_(sheet, output) {
   ) {
     return false;
   }
-  if (Math.max(0, sheet.getLastRow() - 1) !== output.length) {
+  if (output.length > 0) {
+    const existing = sheet.getRange(2, 1, output.length, 6).getValues();
+    const longFormatMatches = output.every((row, rowIndex) =>
+      row.every((value, columnIndex) => {
+        const current = existing[rowIndex][columnIndex];
+        if (columnIndex === 3 || columnIndex === 4 || columnIndex === 5) {
+          return Math.abs(Number(current) - Number(value)) < 0.0000001;
+        }
+        return String(current).trim() === String(value).trim();
+      }),
+    );
+    if (!longFormatMatches) {
+      return false;
+    }
+  }
+  if (
+    String(sheet.getRange(output.length + 2, 1).getDisplayValue()).trim()
+  ) {
     return false;
   }
-  if (output.length === 0) {
-    return true;
+  return doesAIWeeklyMatrixMatch_(sheet, matrix);
+}
+
+function doesAIWeeklyMatrixMatch_(sheet, matrix) {
+  const startColumn =
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_START_COLUMN;
+  if (
+    sheet.getMaxColumns() < startColumn + matrix.headers.length ||
+    sheet.getMaxRows() < matrix.rows.length + 3
+  ) {
+    return false;
+  }
+  if (
+    String(sheet.getRange(1, startColumn).getDisplayValue()).trim() !==
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_TITLE
+  ) {
+    return false;
+  }
+  const headers = sheet
+    .getRange(2, startColumn, 1, matrix.headers.length)
+    .getDisplayValues()[0];
+  if (
+    headers.some(
+      (header, index) => String(header).trim() !== matrix.headers[index],
+    )
+  ) {
+    return false;
+  }
+  if (
+    String(
+      sheet
+        .getRange(2, startColumn + matrix.headers.length)
+        .getDisplayValue(),
+    ).trim()
+  ) {
+    return false;
+  }
+  if (matrix.rows.length === 0) {
+    return !String(sheet.getRange(3, startColumn).getDisplayValue()).trim();
   }
 
-  const existing = sheet.getRange(2, 1, output.length, 6).getValues();
-  return output.every((row, rowIndex) =>
+  const existing = sheet
+    .getRange(3, startColumn, matrix.rows.length, matrix.headers.length)
+    .getValues();
+  const valuesMatch = matrix.rows.every((row, rowIndex) =>
     row.every((value, columnIndex) => {
       const current = existing[rowIndex][columnIndex];
-      if (columnIndex === 3 || columnIndex === 4 || columnIndex === 5) {
-        return Math.abs(Number(current) - Number(value)) < 0.0000001;
+      if (columnIndex === 0) {
+        return String(current).trim() === String(value).trim();
       }
-      return String(current).trim() === String(value).trim();
+      return Number(current) === Number(value);
     }),
   );
+  if (!valuesMatch) {
+    return false;
+  }
+  return !String(
+    sheet
+      .getRange(matrix.rows.length + 3, startColumn)
+      .getDisplayValue(),
+  ).trim();
 }
 
 function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
@@ -468,10 +658,12 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     0,
     AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_LIMIT,
   );
+  const matrix = buildAIWeeklyMatrix_(summary);
   const layoutMatches = doesAIAnalysisDashboardLayoutMatch_(
     sheet,
     summary,
     visibleWeeks,
+    matrix,
   );
   if (
     !force &&
@@ -494,9 +686,15 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
   } else {
     clearAIAnalysisDashboardValues_(sheet, visibleWeeks.length);
   }
-  writeAIAnalysisDashboardValues_(sheet, summary, visibleWeeks);
+  writeAIAnalysisDashboardValues_(sheet, summary, visibleWeeks, matrix);
   if (rebuildLayout) {
-    insertAIAnalysisDashboardCharts_(sheet, summary, visibleWeeks);
+    insertAIAnalysisDashboardCharts_(
+      spreadsheet,
+      sheet,
+      summary,
+      visibleWeeks,
+      matrix,
+    );
   }
   SpreadsheetApp.flush();
 
@@ -514,7 +712,10 @@ function initializeAIAnalysisDashboardLayout_(sheet, visibleWeeks) {
   ensureAIAnalysisSheetCapacity_(
     sheet,
     getAIAnalysisDashboardLastManagedRow_(visibleWeeks.length),
-    AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLUMN,
+    Math.max(
+      AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLUMN,
+      AI_ANALYSIS_DASHBOARD_CONFIG.STACKED_CHART_COLUMN,
+    ),
   );
   sheet.getCharts().forEach((chart) => sheet.removeChart(chart));
   if (sheet.getLastRow() > 0 && sheet.getLastColumn() > 0) {
@@ -550,11 +751,16 @@ function clearAIAnalysisDashboardValues_(sheet, visibleWeekCount) {
   sheet.getRange(1, 1, lastManagedRow, 4).clearContent();
 }
 
-function writeAIAnalysisDashboardValues_(sheet, summary, visibleWeeks) {
+function writeAIAnalysisDashboardValues_(
+  sheet,
+  summary,
+  visibleWeeks,
+  matrix,
+) {
   sheet
     .getRange('A1')
     .setValue(AI_ANALYSIS_DASHBOARD_CONFIG.TITLE)
-    .setNote(AI_ANALYSIS_DASHBOARD_CONFIG.LAYOUT_NOTE);
+    .setNote(buildAIAnalysisDashboardLayoutNote_(matrix));
   sheet.getRange('A2').setValue('Updated At').setFontWeight('bold');
   sheet
     .getRange('B2')
@@ -632,7 +838,13 @@ function formatAIAnalysisDashboardHeader_(range) {
     .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR);
 }
 
-function insertAIAnalysisDashboardCharts_(sheet, summary, visibleWeeks) {
+function insertAIAnalysisDashboardCharts_(
+  spreadsheet,
+  sheet,
+  summary,
+  visibleWeeks,
+  matrix,
+) {
   if (summary.rows.length > 0) {
     insertAIAnalysisCategoryChart_(
       sheet,
@@ -640,6 +852,17 @@ function insertAIAnalysisDashboardCharts_(sheet, summary, visibleWeeks) {
       2,
       'All-time Count of Primary Category',
     );
+  }
+  if (matrix.rows.length > 0) {
+    const weeklySheet = spreadsheet.getSheetByName(
+      AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME,
+    );
+    if (!weeklySheet) {
+      throw new Error(
+        'AI Weekly Summary is missing. Run setupAIAnalysisDashboard() again.',
+      );
+    }
+    insertAIWeeklyStackedChart_(sheet, weeklySheet, matrix);
   }
   visibleWeeks.forEach((week, index) => {
     const startRow = getAIAnalysisWeeklyBlockStartRow_(index);
@@ -690,13 +913,70 @@ function insertAIAnalysisCategoryChart_(sheet, headerRow, chartRow, title) {
   sheet.insertChart(chart);
 }
 
-function doesAIAnalysisDashboardLayoutMatch_(sheet, summary, visibleWeeks) {
+function insertAIWeeklyStackedChart_(dashboardSheet, weeklySheet, matrix) {
+  const chartRange = weeklySheet.getRange(
+    2,
+    AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_START_COLUMN,
+    matrix.rows.length + 1,
+    matrix.categories.length + 1,
+  );
+  const colors = matrix.categories.map((category, index) =>
+    getAIAnalysisCategoryColor_(category, index),
+  );
+  const chart = dashboardSheet
+    .newChart()
+    .asColumnChart()
+    .addRange(chartRange)
+    .setNumHeaders(1)
+    .setPosition(
+      2,
+      AI_ANALYSIS_DASHBOARD_CONFIG.STACKED_CHART_COLUMN,
+      0,
+      0,
+    )
+    .setOption('title', 'Weekly Primary Category Distribution')
+    .setOption('isStacked', true)
+    .setOption('legend', {position: 'top'})
+    .setOption('colors', colors)
+    .setOption('width', 1000)
+    .setOption('height', 500)
+    .setOption('hAxis', {
+      title: 'Week',
+      slantedText: true,
+      slantedTextAngle: 30,
+    })
+    .setOption('vAxis', {
+      title: 'Categorized Emails',
+      minValue: 0,
+      format: '0',
+    })
+    .build();
+  dashboardSheet.insertChart(chart);
+}
+
+function getAIAnalysisCategoryColor_(category, index) {
+  const configuredColor =
+    AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_COLORS[category];
+  if (configuredColor) {
+    return configuredColor;
+  }
+  const fallbackColors =
+    AI_ANALYSIS_DASHBOARD_CONFIG.FALLBACK_CATEGORY_COLORS;
+  return fallbackColors[index % fallbackColors.length];
+}
+
+function doesAIAnalysisDashboardLayoutMatch_(
+  sheet,
+  summary,
+  visibleWeeks,
+  matrix,
+) {
   if (sheet.getLastRow() < 4 || sheet.getLastColumn() < 4) {
     return false;
   }
   if (
     sheet.getRange('A1').getNote() !==
-    AI_ANALYSIS_DASHBOARD_CONFIG.LAYOUT_NOTE
+    buildAIAnalysisDashboardLayoutNote_(matrix)
   ) {
     return false;
   }
@@ -793,7 +1073,21 @@ function doesAIAnalysisCategorySlotMatch_(sheet, headerRow, rows, allowEmpty) {
 }
 
 function expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks) {
-  return (summary.rows.length > 0 ? 1 : 0) + visibleWeeks.length;
+  return (
+    (summary.rows.length > 0 ? 1 : 0) +
+    (summary.weeks.length > 0 ? 1 : 0) +
+    visibleWeeks.length
+  );
+}
+
+function buildAIAnalysisDashboardLayoutNote_(matrix) {
+  const weekSignature = matrix.rows.map((row) => row[0]).join('|');
+  const categorySignature = matrix.categories.join('|');
+  return (
+    `${AI_ANALYSIS_DASHBOARD_CONFIG.LAYOUT_NOTE}\n` +
+    `Weeks: ${weekSignature}\n` +
+    `Categories: ${categorySignature}`
+  );
 }
 
 function getAIAnalysisWeeklyBlockStartRow_(index) {
@@ -839,7 +1133,12 @@ function buildAIAnalysisDashboardStats_(summary, weeklyStats, dashboardStats) {
     distinctCategories: summary.rows.length,
     historicalWeeks: summary.weeks.length,
     visibleWeeklyCharts,
-    totalCharts: (summary.rows.length > 0 ? 1 : 0) + visibleWeeklyCharts,
+    stackedWeeklyChart: summary.weeks.length > 0,
+    totalCharts:
+      (summary.rows.length > 0 ? 1 : 0) +
+      (summary.weeks.length > 0 ? 1 : 0) +
+      visibleWeeklyCharts,
+    weeklyMatrixCategories: getAIWeeklyMatrixCategories_(summary),
     excludedFromWeeklyCount: summary.excludedFromWeeklyCount,
     uncategorizedRows: summary.uncategorizedRows,
     weeklySummary: weeklyStats,
