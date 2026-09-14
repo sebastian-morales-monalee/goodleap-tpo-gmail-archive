@@ -21,6 +21,9 @@
  *   4) syncPostHogSolarTables()
  *   5) previewPdfAnalysisComparisonCounts()
  *   6) backfillPdfAnalysisComparisonCounts()
+ *   7) previewTOFValuesComparison()
+ *   8) setupTOFValuesComparison()
+ *   9) syncPendingTOFValuesComparisons()
  */
 
 const POSTHOG_SOLAR_CONFIG = {
@@ -493,7 +496,14 @@ function syncPostHogSolarTables() {
     return {skippedBecauseLocked: true};
   }
   try {
-    return syncPostHogSolarTablesForResources_(getOrCreateResources_());
+    const resources = getOrCreateResources_();
+    const stats = syncPostHogSolarTablesForResources_(resources);
+    if (typeof syncTOFValuesComparisonsSafely_ === 'function') {
+      stats.tofValuesComparison = syncTOFValuesComparisonsSafely_(
+        resources.spreadsheet,
+      );
+    }
+    return stats;
   } finally {
     lock.releaseLock();
   }

@@ -15,7 +15,8 @@
  *   5) previewPostHogProjectMatches()
  *   6) syncPostHogProjects()
  *   7) setupProjectIdSummary()
- *   8) installHybridGoodLeapPostHogTriggers()
+ *   8) setupTOFValuesComparison()
+ *   9) installHybridGoodLeapPostHogTriggers()
  *
  * The preview and schema inspection functions do not write project results.
  * No PostHog API key is stored in this source file or in Google Sheets.
@@ -652,6 +653,11 @@ function syncPostHogProjects() {
         stats.projectSolarTables = {error: safeSolarError};
         console.error(`[PROJECT SOLAR SYNC ERROR] ${safeSolarError}`);
       }
+    }
+    if (typeof syncTOFValuesComparisonsSafely_ === 'function') {
+      stats.tofValuesComparison = syncTOFValuesComparisonsSafely_(
+        resources.spreadsheet,
+      );
     }
     if (typeof refreshProjectIdSummarySafely_ === 'function') {
       stats.projectIdSummary = refreshProjectIdSummarySafely_(

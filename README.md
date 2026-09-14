@@ -8,7 +8,9 @@ Shade Report PDFs through the OpenAI Responses API. Managed `AI Weekly
 Summary` and `AI Dashboard` sheets preserve the weekly Primary Category
 history and display an all-time Primary Category chart, a two-series stacked
 historical chart that detects Production in `Categories`, and the eight most
-recent individual Primary Category weeks.
+recent individual Primary Category weeks. A deterministic `TOF Values
+Comparison` sheet compares the Aurora PDF tables with the corresponding
+Artemis project tables for each Project ID.
 
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
@@ -42,6 +44,10 @@ Integrated trigger (every 5 minutes)
         |
         +--- only after new mail -> PostHogSync.gs -> PostHog Projects
                                              |
+                                             |-> PostHogSolarTables.gs
+                                             |       `-> Project CSVs
+                                             |               `-> TOFValuesComparison.gs
+                                             |                       `-> TOF Values Comparison
                                              `-> ProjectIdSummary.gs
                                              ^
                                              |
@@ -362,6 +368,47 @@ Primary functions:
 5. `previewPdfAnalysisComparisonCounts()`
 6. `backfillPdfAnalysisComparisonCounts()`
 
+### `TOFValuesComparison.gs`
+
+The deterministic Aurora PDF versus Artemis project comparison workflow.
+
+It:
+
+- Reads the four existing Summary and Monthly CSV links from `PDF Analysis`;
+  it does not reopen PDFs or call OpenAI.
+- Keeps one canonical comparison per Project ID, using the newest
+  `Source Received At` row when a project appears more than once.
+- Matches arrays globally and one-to-one. Identical Panel Count is resolved
+  first; the nearest remaining Panel Count is the primary fallback, while
+  circular Azimuth and Pitch are tie-breakers and review checks.
+- Completes the one-to-one assignment when Aurora and Artemis contain the same
+  number of arrays. If their counts differ, only exact or reasonably close
+  Panel Count candidates are paired and surplus arrays remain unmatched.
+- Uses `Exact Panel and Geometry Match`, `Exact Panel Match`, `Probable Nearest
+  Match`, and `Forced Nearest Match` to expose which rule produced each pair.
+  TOF, Solar Access, TSRF, and monthly results never influence the match.
+- Groups Artemis subarrays only when their shared Array ID prefix and common
+  geometry make the grouping safe. Every original source row is used at most
+  once.
+- Uses Aurora and Artemis throughout the reader-facing headers and writes
+  Artemis-minus-Aurora values for Panel Count, Azimuth, Pitch, annual TOF,
+  annual Solar Access, annual TSRF, and Jan-Dec Solar Access.
+- Preserves published weighted averages and also recalculates
+  panel-count-weighted annual and monthly values from all original rows.
+- Marks probable, grouped-probable, unmatched, incomplete, and invalid data
+  for review instead of inventing an equivalence.
+- Uses content fingerprints and a bounded rotating scan so changed CSVs are
+  eventually recalculated without making the hourly workflow unbounded.
+- Runs safely after project-side CSV synchronization and requires no new
+  trigger or Script Property.
+
+Primary functions:
+
+1. `previewTOFValuesComparison()`
+2. `setupTOFValuesComparison()`
+3. `syncPendingTOFValuesComparisons()`
+4. `refreshChangedTOFValuesComparisons()`
+
 ## Script Properties
 
 Open the Apps Script project, select **Project Settings**, and use the
@@ -507,7 +554,10 @@ complete function order is:
 | 20 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
 | 21 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
 | 22 | `setupProjectIdSummary()` | `ProjectIdSummary.gs` | Create the project-level email, attachment, and PDF rollup |
-| 23 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 23 | `previewTOFValuesComparison()` | `TOFValuesComparison.gs` | Preview deterministic Aurora-versus-Artemis matching without writing the comparison sheet |
+| 24 | `setupTOFValuesComparison()` | `TOFValuesComparison.gs` | Create and format the managed comparison sheet |
+| 25 | `syncPendingTOFValuesComparisons()` | `TOFValuesComparison.gs` | Process one bounded historical comparison batch; rerun until pendingProjects is zero |
+| 26 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -525,7 +575,7 @@ steps for every new deployment.
 Create a standalone Google Apps Script project and set its time zone to
 `America/Bogota`.
 
-Add eight script files to the same project:
+Add nine script files to the same project:
 
 - `Code.gs`
 - `ManualBackfill.gs`
@@ -535,6 +585,7 @@ Add eight script files to the same project:
 - `ProjectIdSummary.gs`
 - `OpenAIPdfExtraction.gs`
 - `PostHogSolarTables.gs`
+- `TOFValuesComparison.gs`
 
 `README.md` is repository documentation and does not need to be pasted into
 the Apps Script editor.
@@ -870,6 +921,37 @@ No Sheet columns or triggers need to be created manually.
 10. Do not add or replace triggers. The existing five-minute coordinator and
    hourly PostHog reconciliation automatically invoke the new workflow.
 
+### Adding TOF Values Comparison to an existing installation
+
+No new Script Property or trigger is required.
+
+1. Create `TOFValuesComparison.gs` in the same Apps Script project and paste
+   the repository version.
+2. Replace `PostHogSolarTables.gs` and `PostHogSync.gs` with the repository
+   versions so project CSV creation invokes the comparison safely.
+3. Save all Apps Script files.
+4. Open `TOFValuesComparison.gs` and run
+   `previewTOFValuesComparison()`. Confirm the Project ID, matched arrays, and
+   unmatched-array counts for the previewed projects. The preview writes
+   neither the Sheet nor Drive files.
+5. Run `setupTOFValuesComparison()` once. It safely migrates an existing
+   version 1 header row from PDF/Project terminology to Aurora/Artemis without
+   shifting its data. Confirm that the tab has Aurora, Artemis, and Delta
+   columns for the Summary metrics and all twelve months.
+6. Run `syncPendingTOFValuesComparisons()` repeatedly until the execution log
+   reports `pendingProjects: 0`. Each run processes at most ten projects. A
+   comparison-version change intentionally places every existing project back
+   in this bounded queue.
+7. Review every row marked `Review Required`, especially `Exact Panel Match`,
+   `Probable Nearest Match`, `Forced Nearest Match`, grouped, or unmatched
+   rows. A delta is always Artemis minus Aurora; percentage differences are
+   percentage points.
+8. Run `refreshChangedTOFValuesComparisons()` when an existing CSV is manually
+   corrected and an immediate content-fingerprint check is needed. Automatic
+   runs check existing projects in small rotating batches.
+9. Do not reinstall or edit triggers. The existing PostHog reconciliation
+   reaches the new workflow after rebuilding the project-side CSVs.
+
 ### Adding Project ID to existing AI Analysis and PDF Analysis sheets
 
 Do not insert either column manually. The migration preserves all existing
@@ -1059,6 +1141,10 @@ stop all PostHog calls while keeping Gmail automation, run
   project-side Summary and Monthly CSVs from structured PostHog data. GoodLeap
   is queried first and Artemis Sales is the fallback. The CSVs are stored in
   the same project Drive folder as the Shade Report.
+- After the four source CSV links exist, `TOFValuesComparison.gs` compares the
+  newest PDF Analysis source for each Project ID. It writes deterministic
+  Summary and Jan-Dec deltas, preserves both published and recalculated
+  weighted averages, and routes uncertain matches to human review.
 - New PDF rows store total PDF panel and array counts directly from the
   structured extraction. Project synchronization stores the corresponding
   active project panel and array counts directly from PostHog data. Historical
@@ -1103,6 +1189,10 @@ The deployment is ready only when all of the following are true:
 - `Project ID Summary` contains one row per resolved Project ID, uses the URL
   from `PostHog Projects`, and reconciles its email and PDF counts with the two
   analysis sheets.
+- `TOF Values Comparison` contains no duplicate Project ID blocks and its
+  Aurora and Artemis source links open correctly. Exact Panel matches outside
+  the geometry thresholds, probable or forced matches, and unmatched rows are
+  marked `Review Required`.
 - The **Triggers** page shows one
   `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
   `syncPostHogProjects` hourly trigger owned by the operating account.
@@ -1118,7 +1208,7 @@ new source record can remain temporarily unavailable in PostHog.
 
 1. Confirm that the target account receives the group messages in Gmail and
    can access the intended PostHog environment.
-2. Copy the seven `.gs` files into a new standalone Apps Script project.
+2. Copy the nine `.gs` files into a new standalone Apps Script project.
 3. Review the Gmail query, historical start date, and time zone.
 4. Obtain a new purpose-specific PostHog Personal API Key; do not reuse another
    person's key.
@@ -1133,11 +1223,13 @@ new source record can remain temporarily unavailable in PostHog.
    preview, and bounded historical extraction. Review both generated CSVs.
 11. Run the PostHog solar-table setup, connection test, preview, and historical
     synchronization. Review both project-side CSVs.
-12. Use the schema inspection functions only if the default mapping fails in
+12. Run the TOF comparison preview, setup, and bounded historical sync. Review
+    probable, grouped, and unmatched rows.
+13. Use the schema inspection functions only if the default mapping fails in
    the target environment.
-13. After all workflows have been validated, run
+14. After all workflows have been validated, run
    `installHybridGoodLeapPostHogTriggers()`.
-14. Confirm that exactly one integrated five-minute trigger and one hourly
+15. Confirm that exactly one integrated five-minute trigger and one hourly
    PostHog trigger exist.
 
 All Drive folders, Sheets tabs, Gmail labels, and time-based triggers are
