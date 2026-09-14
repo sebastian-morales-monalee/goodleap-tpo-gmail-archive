@@ -23,6 +23,19 @@ const TOF_COMPARISON_CONFIG = {
   HEADER_BACKGROUND: '#7200c9',
   HEADER_FONT_COLOR: '#ffffff',
   TAB_COLOR: '#7200c9',
+  BODY_FONT_FAMILY: 'Arial',
+  BODY_FONT_COLOR: '#202124',
+  PROJECT_BAND_PRIMARY: '#ffffff',
+  PROJECT_BAND_SECONDARY: '#f3f6fa',
+  PROJECT_BORDER_COLOR: '#9aa0a6',
+  AURORA_HEADER_BACKGROUND: '#1f4e78',
+  AURORA_DATA_BACKGROUND: '#eaf2f8',
+  ARTEMIS_HEADER_BACKGROUND: '#2e7d32',
+  ARTEMIS_DATA_BACKGROUND: '#eaf4ea',
+  DELTA_HEADER_BACKGROUND: '#b45f06',
+  DELTA_DATA_BACKGROUND: '#fff2cc',
+  SUPPORT_HEADER_BACKGROUND: '#4b5563',
+  ERROR_HEADER_BACKGROUND: '#9c1c1c',
   DATE_FORMAT: 'yyyy-mm-dd hh:mm:ss',
   ALGORITHM_VERSION: 'tof-comparison-v2-panel-first',
   MANUAL_BATCH_SIZE: 10,
@@ -93,6 +106,34 @@ function setupTOFValuesComparison() {
   console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
   console.log(`Derived sheet: ${sheet.getName()}`);
   return {sheet: sheet.getName(), headers: getTOFValuesComparisonHeaders_().length};
+}
+
+/** Reapplies the managed visual style without rereading CSVs or recalculating data. */
+function refreshTOFValuesComparisonFormatting() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    console.log(
+      'Another GoodLeap execution is running. TOF formatting was skipped safely.',
+    );
+    return {skippedBecauseLocked: true};
+  }
+  try {
+    const resources = getOrCreateResources_();
+    const sheet = getOrCreateTOFValuesComparisonSheet_(resources.spreadsheet);
+    const lastRow = Math.max(sheet.getLastRow(), 1);
+    const projectGroups = formatTOFValuesComparisonSheet_(sheet, lastRow);
+    SpreadsheetApp.flush();
+    const result = {
+      sheet: sheet.getName(),
+      formattedRows: Math.max(lastRow - 1, 0),
+      projectGroups,
+    };
+    console.log(JSON.stringify(result, null, 2));
+    console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**
@@ -1415,11 +1456,27 @@ function formatTOFValuesComparisonSheet_(sheet, lastRow) {
   sheet.setFrozenRows(1);
   sheet.setFrozenColumns(2);
   sheet.setTabColor(TOF_COMPARISON_CONFIG.TAB_COLOR);
+  sheet.setHiddenGridlines(true);
   sheet.getRange(1, 1, 1, headers.length)
     .setBackground(TOF_COMPARISON_CONFIG.HEADER_BACKGROUND)
     .setFontColor(TOF_COMPARISON_CONFIG.HEADER_FONT_COLOR)
+    .setFontFamily(TOF_COMPARISON_CONFIG.BODY_FONT_FAMILY)
+    .setFontSize(10)
     .setFontWeight('bold')
-    .setWrap(true);
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setWrap(true)
+    .setBorder(
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      '#ffffff',
+      SpreadsheetApp.BorderStyle.SOLID,
+    );
+  applyTOFComparisonHeaderPalette_(sheet, headers);
   sheet.setRowHeight(1, 42);
   sheet.setColumnWidth(1, 245);
   sheet.setColumnWidth(2, 300);
@@ -1431,7 +1488,21 @@ function formatTOFValuesComparisonSheet_(sheet, lastRow) {
   const errorColumn = headers.indexOf('Error') + 1;
   sheet.setColumnWidth(notesColumn, 360);
   sheet.setColumnWidth(errorColumn, 300);
+  let projectGroups = 0;
   if (lastRow > 1) {
+    const bodyRange = sheet.getRange(2, 1, lastRow - 1, headers.length);
+    bodyRange
+      .setFontFamily(TOF_COMPARISON_CONFIG.BODY_FONT_FAMILY)
+      .setFontSize(10)
+      .setFontColor(TOF_COMPARISON_CONFIG.BODY_FONT_COLOR)
+      .setVerticalAlignment('middle')
+      .setBorder(false, false, false, false, false, false);
+    const groups = getTOFProjectGroups_(sheet, lastRow);
+    projectGroups = groups.length;
+    applyTOFProjectBanding_(sheet, lastRow, headers.length, groups);
+    applyTOFComparisonColumnPalette_(sheet, lastRow, headers);
+    applyTOFProjectGroupBorders_(sheet, headers.length, groups);
+    applyTOFComparisonStatusPalette_(sheet, lastRow, headers);
     sheet.getRange(2, 4, lastRow - 1, 1)
       .setNumberFormat(TOF_COMPARISON_CONFIG.DATE_FORMAT);
     sheet.getRange(2, 9, lastRow - 1, 1)
@@ -1450,6 +1521,217 @@ function formatTOFValuesComparisonSheet_(sheet, lastRow) {
   const orderColumn = headers.indexOf('Row Order') + 1;
   sheet.hideColumns(signatureColumn, 3);
   if (errorColumn <= signatureColumn + 2) sheet.showColumns(errorColumn);
+  return projectGroups;
+}
+
+function applyTOFComparisonHeaderPalette_(sheet, headers) {
+  setTOFHeaderBackgroundByPrefix_(
+    sheet,
+    headers,
+    'Aurora ',
+    TOF_COMPARISON_CONFIG.AURORA_HEADER_BACKGROUND,
+  );
+  setTOFHeaderBackgroundByPrefix_(
+    sheet,
+    headers,
+    'Artemis ',
+    TOF_COMPARISON_CONFIG.ARTEMIS_HEADER_BACKGROUND,
+  );
+  setTOFHeaderBackgroundByPrefix_(
+    sheet,
+    headers,
+    'Delta ',
+    TOF_COMPARISON_CONFIG.DELTA_HEADER_BACKGROUND,
+  );
+  setTOFHeaderBackgrounds_(sheet, headers, [
+    'Notes',
+    'Source Signature',
+    'Comparison Version',
+    'Row Order',
+  ], TOF_COMPARISON_CONFIG.SUPPORT_HEADER_BACKGROUND);
+  setTOFHeaderBackgrounds_(
+    sheet,
+    headers,
+    ['Error'],
+    TOF_COMPARISON_CONFIG.ERROR_HEADER_BACKGROUND,
+  );
+}
+
+function setTOFHeaderBackgroundByPrefix_(sheet, headers, prefix, color) {
+  const names = headers.filter((header) => String(header).indexOf(prefix) === 0);
+  setTOFHeaderBackgrounds_(sheet, headers, names, color);
+}
+
+function setTOFHeaderBackgrounds_(sheet, headers, names, color) {
+  const ranges = names
+    .map((name) => headers.indexOf(name) + 1)
+    .filter((column) => column > 0)
+    .map((column) => `${toTOFA1Column_(column)}1`);
+  if (ranges.length > 0) sheet.getRangeList(ranges).setBackground(color);
+}
+
+function applyTOFProjectBanding_(sheet, lastRow, columnCount, groups) {
+  if (groups.length === 0) return;
+  const lastColumn = toTOFA1Column_(columnCount);
+  sheet.getRange(2, 1, lastRow - 1, columnCount)
+    .setBackground(TOF_COMPARISON_CONFIG.PROJECT_BAND_PRIMARY);
+  const secondaryRanges = groups
+    .filter((group, index) => index % 2 === 1)
+    .map((group) => `A${group.start}:${lastColumn}${group.end}`);
+  if (secondaryRanges.length > 0) {
+    sheet.getRangeList(secondaryRanges)
+      .setBackground(TOF_COMPARISON_CONFIG.PROJECT_BAND_SECONDARY);
+  }
+  sheet.getRange(2, 1, lastRow - 1, 1).setFontWeight('bold');
+}
+
+function applyTOFComparisonColumnPalette_(sheet, lastRow, headers) {
+  setTOFDataBackgroundByPrefix_(
+    sheet,
+    lastRow,
+    headers,
+    'Aurora ',
+    TOF_COMPARISON_CONFIG.AURORA_DATA_BACKGROUND,
+  );
+  setTOFDataBackgroundByPrefix_(
+    sheet,
+    lastRow,
+    headers,
+    'Artemis ',
+    TOF_COMPARISON_CONFIG.ARTEMIS_DATA_BACKGROUND,
+  );
+  setTOFDataBackgroundByPrefix_(
+    sheet,
+    lastRow,
+    headers,
+    'Delta ',
+    TOF_COMPARISON_CONFIG.DELTA_DATA_BACKGROUND,
+  );
+}
+
+function setTOFDataBackgroundByPrefix_(sheet, lastRow, headers, prefix, color) {
+  const ranges = headers
+    .map((header, index) => ({header: String(header), column: index + 1}))
+    .filter((item) => item.header.indexOf(prefix) === 0)
+    .map((item) => {
+      const column = toTOFA1Column_(item.column);
+      return `${column}2:${column}${lastRow}`;
+    });
+  if (ranges.length > 0) sheet.getRangeList(ranges).setBackground(color);
+}
+
+function applyTOFProjectGroupBorders_(sheet, columnCount, groups) {
+  if (groups.length === 0) return;
+  const lastColumn = toTOFA1Column_(columnCount);
+  const ranges = groups.map(
+    (group) => `A${group.start}:${lastColumn}${group.end}`,
+  );
+  sheet.getRangeList(ranges).setBorder(
+    true,
+    null,
+    null,
+    null,
+    null,
+    null,
+    TOF_COMPARISON_CONFIG.PROJECT_BORDER_COLOR,
+    SpreadsheetApp.BorderStyle.SOLID_MEDIUM,
+  );
+}
+
+function getTOFProjectGroups_(sheet, lastRow) {
+  if (lastRow < 2) return [];
+  const projectIds = sheet.getRange(2, 1, lastRow - 1, 1)
+    .getDisplayValues()
+    .map((row) => String(row[0] || '').trim().toLowerCase());
+  const groups = [];
+  let start = 2;
+  let current = projectIds[0] || '__blank_row_2';
+  for (let index = 1; index < projectIds.length; index += 1) {
+    const projectId = projectIds[index] || `__blank_row_${index + 2}`;
+    if (projectId === current) continue;
+    groups.push({start, end: index + 1});
+    start = index + 2;
+    current = projectId;
+  }
+  groups.push({start, end: lastRow});
+  return groups;
+}
+
+function applyTOFComparisonStatusPalette_(sheet, lastRow, headers) {
+  const statusColumn = headers.indexOf('Comparison Status') + 1;
+  if (statusColumn < 1 || lastRow < 2) return;
+  const values = sheet.getRange(2, statusColumn, lastRow - 1, 1)
+    .getDisplayValues()
+    .map((row) => String(row[0] || '').trim());
+  [
+    {value: 'Compared', background: '#e6f4ea', font: '#137333'},
+    {value: 'Review Required', background: '#fef7e0', font: '#b06000'},
+    {value: 'Pending Sources', background: '#e8f0fe', font: '#174ea6'},
+    {value: 'Error', background: '#fce8e6', font: '#b3261e'},
+  ].forEach((style) => {
+    const ranges = buildTOFContiguousValueRanges_(
+      values,
+      statusColumn,
+      (value) => value === style.value,
+    );
+    if (ranges.length === 0) return;
+    sheet.getRangeList(ranges)
+      .setBackground(style.background)
+      .setFontColor(style.font)
+      .setFontWeight('bold');
+  });
+  const errorColumn = headers.indexOf('Error') + 1;
+  if (errorColumn < 1) return;
+  const errors = sheet.getRange(2, errorColumn, lastRow - 1, 1)
+    .getDisplayValues()
+    .map((row) => String(row[0] || '').trim());
+  const errorRanges = buildTOFContiguousValueRanges_(
+    errors,
+    errorColumn,
+    (value) => value !== '',
+  );
+  if (errorRanges.length > 0) {
+    sheet.getRangeList(errorRanges)
+      .setBackground('#fce8e6')
+      .setFontColor('#b3261e')
+      .setFontWeight('bold');
+  }
+}
+
+function buildTOFContiguousValueRanges_(values, columnNumber, predicate) {
+  const ranges = [];
+  const column = toTOFA1Column_(columnNumber);
+  let start = null;
+  values.forEach((value, index) => {
+    const row = index + 2;
+    if (predicate(value)) {
+      if (start === null) start = row;
+      return;
+    }
+    if (start !== null) {
+      ranges.push(`${column}${start}:${column}${row - 1}`);
+      start = null;
+    }
+  });
+  if (start !== null) {
+    ranges.push(`${column}${start}:${column}${lastRowFromValues_(values)}`);
+  }
+  return ranges;
+}
+
+function lastRowFromValues_(values) {
+  return values.length + 1;
+}
+
+function toTOFA1Column_(columnNumber) {
+  let column = Number(columnNumber);
+  let label = '';
+  while (column > 0) {
+    const remainder = (column - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    column = Math.floor((column - 1) / 26);
+  }
+  return label;
 }
 
 function readTOFDriveCsv_(url) {

@@ -399,6 +399,9 @@ It:
   for review instead of inventing an equivalence.
 - Uses content fingerprints and a bounded rotating scan so changed CSVs are
   eventually recalculated without making the hourly workflow unbounded.
+- Applies alternating project-level bands, strong project separators, and
+  stable Aurora, Artemis, and Delta color families whenever rows are rewritten.
+  Status and Error cells use restrained exception colors for faster review.
 - Runs safely after project-side CSV synchronization and requires no new
   trigger or Script Property.
 
@@ -408,6 +411,7 @@ Primary functions:
 2. `setupTOFValuesComparison()`
 3. `syncPendingTOFValuesComparisons()`
 4. `refreshChangedTOFValuesComparisons()`
+5. `refreshTOFValuesComparisonFormatting()`
 
 ## Script Properties
 
@@ -557,7 +561,8 @@ complete function order is:
 | 23 | `previewTOFValuesComparison()` | `TOFValuesComparison.gs` | Preview deterministic Aurora-versus-Artemis matching without writing the comparison sheet |
 | 24 | `setupTOFValuesComparison()` | `TOFValuesComparison.gs` | Create and format the managed comparison sheet |
 | 25 | `syncPendingTOFValuesComparisons()` | `TOFValuesComparison.gs` | Process one bounded historical comparison batch; rerun until pendingProjects is zero |
-| 26 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 26 | `refreshTOFValuesComparisonFormatting()` | `TOFValuesComparison.gs` | Reapply project bands and Aurora/Artemis/Delta styling without rereading CSVs |
+| 27 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -938,18 +943,21 @@ No new Script Property or trigger is required.
    version 1 header row from PDF/Project terminology to Aurora/Artemis without
    shifting its data. Confirm that the tab has Aurora, Artemis, and Delta
    columns for the Summary metrics and all twelve months.
-6. Run `syncPendingTOFValuesComparisons()` repeatedly until the execution log
+6. Run `refreshTOFValuesComparisonFormatting()` once to style every historical
+   project block without rereading the source CSVs. Future comparison writes
+   reapply the same style automatically.
+7. Run `syncPendingTOFValuesComparisons()` repeatedly until the execution log
    reports `pendingProjects: 0`. Each run processes at most ten projects. A
    comparison-version change intentionally places every existing project back
    in this bounded queue.
-7. Review every row marked `Review Required`, especially `Exact Panel Match`,
+8. Review every row marked `Review Required`, especially `Exact Panel Match`,
    `Probable Nearest Match`, `Forced Nearest Match`, grouped, or unmatched
    rows. A delta is always Artemis minus Aurora; percentage differences are
    percentage points.
-8. Run `refreshChangedTOFValuesComparisons()` when an existing CSV is manually
+9. Run `refreshChangedTOFValuesComparisons()` when an existing CSV is manually
    corrected and an immediate content-fingerprint check is needed. Automatic
    runs check existing projects in small rotating batches.
-9. Do not reinstall or edit triggers. The existing PostHog reconciliation
+10. Do not reinstall or edit triggers. The existing PostHog reconciliation
    reaches the new workflow after rebuilding the project-side CSVs.
 
 ### Adding Project ID to existing AI Analysis and PDF Analysis sheets
@@ -1192,7 +1200,9 @@ The deployment is ready only when all of the following are true:
 - `TOF Values Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are
-  marked `Review Required`.
+  marked `Review Required`. Every contiguous Project ID block shares a visual
+  band, adjacent projects alternate colors, and Aurora, Artemis, and Delta
+  columns retain their distinct header and body palettes.
 - The **Triggers** page shows one
   `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
   `syncPostHogProjects` hourly trigger owned by the operating account.
