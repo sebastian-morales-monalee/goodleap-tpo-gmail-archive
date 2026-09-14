@@ -476,6 +476,11 @@ function processOpenAIPdfBatch_(options) {
     });
 
     SpreadsheetApp.flush();
+    if (typeof refreshProjectIdSummarySafely_ === 'function') {
+      stats.projectIdSummary = refreshProjectIdSummarySafely_(
+        resources.spreadsheet,
+      );
+    }
     console.log(JSON.stringify(stats, null, 2));
     return stats;
   } finally {

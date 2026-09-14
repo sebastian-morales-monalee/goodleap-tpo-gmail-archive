@@ -370,6 +370,11 @@ function processOpenAIEmailAnalysisBatch_(options) {
     if (typeof refreshAIAnalysisDashboardSafely_ === 'function') {
       stats.dashboard = refreshAIAnalysisDashboardSafely_();
     }
+    if (typeof refreshProjectIdSummarySafely_ === 'function') {
+      stats.projectIdSummary = refreshProjectIdSummarySafely_(
+        resources.spreadsheet,
+      );
+    }
     console.log(JSON.stringify(stats, null, 2));
     return stats;
   } finally {

@@ -14,7 +14,8 @@
  *   4) inspectPostHogGoodLeapDatabaseSchema()
  *   5) previewPostHogProjectMatches()
  *   6) syncPostHogProjects()
- *   7) installHybridGoodLeapPostHogTriggers()
+ *   7) setupProjectIdSummary()
+ *   8) installHybridGoodLeapPostHogTriggers()
  *
  * The preview and schema inspection functions do not write project results.
  * No PostHog API key is stored in this source file or in Google Sheets.
@@ -652,6 +653,11 @@ function syncPostHogProjects() {
         console.error(`[PROJECT SOLAR SYNC ERROR] ${safeSolarError}`);
       }
     }
+    if (typeof refreshProjectIdSummarySafely_ === 'function') {
+      stats.projectIdSummary = refreshProjectIdSummarySafely_(
+        resources.spreadsheet,
+      );
+    }
     SpreadsheetApp.flush();
 
     console.log(JSON.stringify(stats, null, 2));
@@ -680,6 +686,11 @@ function syncProjectIdsToAnalysisSheets() {
     const stats = syncPostHogProjectIdsToAnalysisSheets_(
       resources.spreadsheet,
     );
+    if (typeof refreshProjectIdSummarySafely_ === 'function') {
+      stats.projectIdSummary = refreshProjectIdSummarySafely_(
+        resources.spreadsheet,
+      );
+    }
     SpreadsheetApp.flush();
     console.log(JSON.stringify(stats, null, 2));
     return stats;

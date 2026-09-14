@@ -31,13 +31,18 @@ Integrated trigger (every 5 minutes)
         |                                      `-> AIAnalysisDashboard.gs
         |                                              |-> AI Weekly Summary
         |                                              `-> AI Dashboard
+        |                                      `-> ProjectIdSummary.gs
+        |                                              `-> Project ID Summary
         |
         +--- pending Shade Reports -> OpenAIPdfExtraction.gs
         |                                  |-> PDF Analysis
         |                                  |-> Summary CSV
-        |                                  `-> Monthly CSV
+        |                                  |-> Monthly CSV
+        |                                  `-> ProjectIdSummary.gs
         |
         +--- only after new mail -> PostHogSync.gs -> PostHog Projects
+                                             |
+                                             `-> ProjectIdSummary.gs
                                              ^
                                              |
                               Hourly reconciliation fallback
@@ -207,6 +212,29 @@ Primary functions:
 1. `previewAIAnalysisDashboard()`
 2. `setupAIAnalysisDashboard()`
 3. `refreshAIAnalysisDashboard()`
+
+### `ProjectIdSummary.gs`
+
+The deterministic project-level rollup.
+
+It:
+
+- Creates and maintains `Project ID Summary` with one row per resolved Project
+  ID from `PostHog Projects`.
+- Copies the authoritative Project URL instead of constructing it, preserving
+  the correct GoodLeap or Artemis Sales domain.
+- Counts associated rows in `AI Analysis`, `Attachments`, and `PDF Analysis`.
+- Shows the first and most recent `Email Received At` value for each project.
+- Omits Application ID and Organization from the reader-facing output.
+- Sorts projects by Email Count and then by the most recent email.
+- Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
+  workflows without adding another trigger or making external API calls.
+
+Primary functions:
+
+1. `previewProjectIdSummary()`
+2. `setupProjectIdSummary()`
+3. `refreshProjectIdSummary()`
 
 ### `OpenAIPdfExtraction.gs`
 
@@ -478,7 +506,8 @@ complete function order is:
 | 19 | `testPostHogSolarTableConnection()` | `PostHogSolarTables.gs` | Verify both GoodLeap and Sales project/panel schemas |
 | 20 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
 | 21 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
-| 22 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 22 | `setupProjectIdSummary()` | `ProjectIdSummary.gs` | Create the project-level email, attachment, and PDF rollup |
+| 23 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -496,13 +525,14 @@ steps for every new deployment.
 Create a standalone Google Apps Script project and set its time zone to
 `America/Bogota`.
 
-Add seven script files to the same project:
+Add eight script files to the same project:
 
 - `Code.gs`
 - `ManualBackfill.gs`
 - `PostHogSync.gs`
 - `OpenAIAnalysis.gs`
 - `AIAnalysisDashboard.gs`
+- `ProjectIdSummary.gs`
 - `OpenAIPdfExtraction.gs`
 - `PostHogSolarTables.gs`
 
@@ -761,6 +791,29 @@ No new Script Property or trigger is required.
 8. To rebuild the dashboard manually later, run
    `refreshAIAnalysisDashboard()`.
 
+### Adding Project ID Summary to an existing installation
+
+No new Script Property or trigger is required.
+
+1. Create `ProjectIdSummary.gs` in the same Apps Script project and paste the
+   repository version.
+2. Replace `OpenAIAnalysis.gs`, `OpenAIPdfExtraction.gs`, and `PostHogSync.gs`
+   with the repository versions so their existing workflows refresh the
+   summary safely.
+3. Save the Apps Script project.
+4. Open `ProjectIdSummary.gs` and run `previewProjectIdSummary()`. Confirm that
+   the logged unique-project, email-row, and PDF-row totals match the source
+   sheets. The preview does not write the summary.
+5. Run `setupProjectIdSummary()` once. Confirm that `Project ID Summary`
+   contains exactly these columns: `Project ID`, `Project URL`, `Email Count`,
+   `Attachment Count`, `Analyzed PDF Count`, `First Email Received At`, and
+   `Last Email Received At`.
+6. Run `refreshProjectIdSummary()` a second time. The expected result includes
+   `updated: false` and `unchanged: true` when no source data changed.
+7. Do not reinstall or edit triggers. The current five-minute and hourly
+   workflows discover the new summary functions from the shared Apps Script
+   runtime.
+
 ### Adding Shade Report PDF extraction to an existing installation
 
 An installation that already has the integrated five-minute trigger does not
@@ -980,6 +1033,10 @@ stop all PostHog calls while keeping Gmail automation, run
   one stacked-history, and up to eight recent weekly charts.
   Existing chart objects remain in place while only counts change within the
   same visible weeks.
+- `ProjectIdSummary.gs` maintains one row per resolved project with its
+  authoritative URL, email count, attachment count, analyzed-PDF count, and
+  first and most recent email timestamps. It refreshes after the AI email,
+  PDF, and PostHog workflows and does not require another trigger.
 - An OpenAI error is written to that message's analysis row and does not block
   the following PostHog synchronization. Failed rows require an explicit
   reviewed retry.
@@ -1043,6 +1100,9 @@ The deployment is ready only when all of the following are true:
   the values equal the non-weighted rows in the corresponding Summary CSVs.
 - `AI Analysis` and `PDF Analysis` contain the same Project ID shown for their
   Application ID in `PostHog Projects`, or remain blank when it is `Not Found`.
+- `Project ID Summary` contains one row per resolved Project ID, uses the URL
+  from `PostHog Projects`, and reconciles its email and PDF counts with the two
+  analysis sheets.
 - The **Triggers** page shows one
   `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
   `syncPostHogProjects` hourly trigger owned by the operating account.
