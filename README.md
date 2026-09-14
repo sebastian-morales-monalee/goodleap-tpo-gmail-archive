@@ -6,8 +6,9 @@ the archive with the corresponding Artemis Sales Project ID from PostHog. It
 also classifies each archived email and extracts the two tabular datasets from
 Shade Report PDFs through the OpenAI Responses API. Managed `AI Weekly
 Summary` and `AI Dashboard` sheets preserve the weekly Primary Category
-history and display an all-time chart, a stacked historical weekly chart, and
-the eight most recent individual weeks.
+history and display an all-time Primary Category chart, a two-series stacked
+historical chart that detects Production in `Categories`, and the eight most
+recent individual Primary Category weeks.
 
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
@@ -180,9 +181,16 @@ It:
 - Adds a visible `Weekly Category Matrix` beside the long-format weekly table.
   It includes every configured category, writes explicit zeroes for categories
   without emails in a week, and orders weeks chronologically for charting.
-- Displays one all-time chart, one stacked weekly distribution chart covering
-  the complete history, and the eight most recent individual weekly charts,
-  for a maximum of ten charts in `AI Dashboard`.
+- Adds a visible `Weekly Production vs Other Categories` matrix. Each analyzed
+  email is counted once: under `Production with other categories` when its
+  multi-value `Categories` cell contains the exact Production category, or
+  under `Other Categories without Production` otherwise. New and custom
+  non-Production categories are included automatically.
+- Displays one all-time chart, one two-series stacked chart covering the
+  complete history, and the eight most recent individual weekly charts, for a
+  maximum of ten charts in `AI Dashboard`.
+- Shows the count inside each segment of the stacked chart, with a descriptive
+  legend for both series.
 - Keeps each category in a stable matrix column and chart color. Categories
   outside the configured taxonomy are appended deterministically for review.
 - Keeps weekly chart positions fixed. During a visible week, source-range
@@ -460,7 +468,7 @@ complete function order is:
 | 9 | `testOpenAIConnection()` | `OpenAIAnalysis.gs` | Verify API authentication, model access, and Structured Outputs |
 | 10 | `previewOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Analyze one email without writing the AI Analysis sheet |
 | 11 | `analyzePendingGoodLeapEmailsWithOpenAI()` | `OpenAIAnalysis.gs` | Write the first bounded historical analysis batch; rerun until pending is zero |
-| 12 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create the long and wide weekly summaries plus all-time, stacked-history, and recent weekly charts |
+| 12 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create Primary Category summaries plus the Categories-based Production-versus-other history and charts |
 | 13 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
 | 14 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
 | 15 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
@@ -639,9 +647,10 @@ Before installing the schedule, initialize and validate OpenAI:
 8. Open `AIAnalysisDashboard.gs`, run `previewAIAnalysisDashboard()`, and
    confirm that the logged all-time and weekly counts match `AI Analysis`.
 9. Run `setupAIAnalysisDashboard()` and confirm that `AI Weekly Summary`
-   contains both the long weekly history and the wide category matrix. Confirm
-   that `AI Dashboard` contains one all-time chart, one stacked historical
-   chart, and up to eight weekly charts, newest first.
+   contains the long weekly history, detailed Primary Category matrix, and
+   Categories-based Production-versus-other matrix. Confirm that `AI Dashboard`
+   contains one all-time chart, one two-series stacked historical chart, and up
+   to eight weekly charts, newest first.
 
 Next, initialize and validate Shade Report extraction:
 
@@ -741,9 +750,10 @@ No new Script Property or trigger is required.
 4. Open `AIAnalysisDashboard.gs` and run `previewAIAnalysisDashboard()`.
    Confirm the logged all-time and weekly category counts.
 5. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Weekly Summary`
-   contains every historical week in both long and wide formats. Confirm that
-   `AI Dashboard` contains the all-time chart, the stacked historical chart,
-   and up to eight weekly charts, newest first.
+   contains every historical week in long and wide formats, including the
+   Production-versus-other matrix. Confirm that `AI Dashboard` contains the
+   all-time chart, the two-series stacked historical chart, and up to eight
+   weekly charts, newest first.
 6. Optionally delete the manually created `Temporal` sheet after validation;
    the managed dashboard does not read or modify it.
 7. Do not reinstall or manually edit triggers. The existing five-minute
@@ -963,10 +973,11 @@ stop all PostHog calls while keeping Gmail automation, run
   `AI Analysis`. No API call is made when the pending batch is empty.
 - After each analysis check, `AIAnalysisDashboard.gs` compares the current
   Primary Category counts and `Email Received At` weeks with both managed
-  reporting sheets. `AI Weekly Summary` keeps the complete weekly history;
-  its visible category matrix drives the stacked historical chart.
-  `AI Dashboard` shows one all-time, one stacked-history, and up to eight
-  recent weekly charts.
+  reporting sheets. `AI Weekly Summary` keeps the complete Primary Category
+  history and classifies each valid weekly row as Production or Other
+  Categories by inspecting the multi-value `Categories` field. That two-series
+  range drives the stacked historical chart. `AI Dashboard` shows one all-time,
+  one stacked-history, and up to eight recent weekly charts.
   Existing chart objects remain in place while only counts change within the
   same visible weeks.
 - An OpenAI error is written to that message's analysis row and does not block
@@ -1015,9 +1026,11 @@ The deployment is ready only when all of the following are true:
 - `AI Analysis` contains one successful row for every intended historical
   Gmail Message ID, with no unexplained `Error` rows.
 - `AI Weekly Summary` contains all Monday-to-Sunday category aggregates in
-  long and wide formats. Each matrix row sums to its weekly total.
+  long and wide formats. Each detailed row and each Categories-based
+  Production-versus-other row sums to its weekly total.
 - `AI Dashboard` shows no more than ten charts: one all-time, one stacked
-  historical distribution, and eight individual weekly charts.
+  historical Production-versus-other comparison, and eight individual weekly
+  charts.
 - `testOpenAIPdfConnection()` passes and does not expose the API key.
 - `previewOpenAIPdfExtraction()` returns all visible Array IDs for a verified
   Shade Report.
