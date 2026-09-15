@@ -48,6 +48,8 @@ Integrated trigger (every 5 minutes)
                                              |       `-> Project CSVs
                                              |               `-> TOFValuesComparison.gs
                                              |                       `-> Shade Reports Comparison
+                                             |                               `-> ShadeReportsComparisonProd.gs
+                                             |                                       `-> Shade Reports Comparison PROD
                                              `-> ProjectIdSummary.gs
                                              ^
                                              |
@@ -426,6 +428,30 @@ Primary functions:
 4. `refreshChangedTOFValuesComparisons()`
 5. `refreshTOFValuesComparisonFormatting()`
 
+### `ShadeReportsComparisonProd.gs`
+
+The production-only materialized comparison view.
+
+It:
+
+- Creates and maintains `Shade Reports Comparison PROD` with the same columns,
+  project blocks, Aurora/Artemis/Delta values, filters, and formatting as
+  `Shade Reports Comparison`.
+- Includes only Project IDs whose `Production Category Group` in
+  `Project ID Summary` is `Production with other categories`.
+- Copies existing comparison rows without rereading CSVs or calling OpenAI,
+  PostHog, Gmail, or Drive.
+- Adds or removes complete Project ID blocks when their production grouping or
+  source comparison changes.
+- Refreshes safely after both the main Shade Reports comparison and Project ID
+  Summary workflows, without adding another trigger.
+
+Primary functions:
+
+1. `previewShadeReportsComparisonProd()`
+2. `setupShadeReportsComparisonProd()`
+3. `refreshShadeReportsComparisonProd()`
+
 ## Script Properties
 
 Open the Apps Script project, select **Project Settings**, and use the
@@ -581,7 +607,10 @@ complete function order is:
 | 24 | `setupTOFValuesComparison()` | `TOFValuesComparison.gs` | Create and format the managed comparison sheet |
 | 25 | `syncPendingTOFValuesComparisons()` | `TOFValuesComparison.gs` | Process one bounded historical comparison batch; rerun until pendingProjects is zero |
 | 26 | `refreshTOFValuesComparisonFormatting()` | `TOFValuesComparison.gs` | Reapply project bands and Aurora/Artemis/Delta styling without rereading CSVs |
-| 27 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
+| 27 | `previewShadeReportsComparisonProd()` | `ShadeReportsComparisonProd.gs` | Preview production eligibility and missing comparisons without writing |
+| 28 | `setupShadeReportsComparisonProd()` | `ShadeReportsComparisonProd.gs` | Create and populate the production-only comparison view |
+| 29 | `refreshShadeReportsComparisonProd()` | `ShadeReportsComparisonProd.gs` | Reconcile the production-only view with its two source sheets |
+| 30 | `installHybridGoodLeapPostHogTriggers()` | `PostHogSync.gs` | Replace managed triggers with the final five-minute and hourly schedule |
 
 Google Apps Script loads every `.gs` file into one shared runtime namespace,
 but the editor's manual-run function selector is contextual to the currently
@@ -990,6 +1019,27 @@ No new Script Property or trigger is required.
 11. Do not reinstall or edit triggers. The existing PostHog reconciliation
    reaches the new workflow after rebuilding the project-side CSVs.
 
+### Adding Shade Reports Comparison PROD to an existing installation
+
+No new Script Property, CSV extraction, API key, or trigger is required.
+
+1. Create `ShadeReportsComparisonProd.gs` in the same Apps Script project and
+   paste the repository version.
+2. Replace `TOFValuesComparison.gs` and `ProjectIdSummary.gs` with the
+   repository versions so changes from either source refresh the PROD view.
+3. Save all three files.
+4. Run `previewShadeReportsComparisonProd()`. Confirm the eligible production,
+   included, excluded, and missing comparison project counts. The preview does
+   not create or modify the destination sheet.
+5. Run `setupShadeReportsComparisonProd()` once. Confirm that
+   `Shade Reports Comparison PROD` contains only complete Project ID blocks
+   classified as `Production with other categories` and matches the source
+   comparison values and formatting.
+6. Run `refreshShadeReportsComparisonProd()` again. With unchanged sources,
+   the expected result includes `updated: false` and `unchanged: true`.
+7. Do not install another trigger. Changes to the primary comparison or to
+   `Project ID Summary` refresh this view through the existing workflows.
+
 ### Adding Project ID to existing AI Analysis and PDF Analysis sheets
 
 Do not insert either column manually. The migration preserves all existing
@@ -1236,6 +1286,9 @@ The deployment is ready only when all of the following are true:
   marked `Review Required`. Every contiguous Project ID block shares a visual
   band, adjacent projects alternate colors, and Aurora, Artemis, and Delta
   columns retain their distinct header and body palettes.
+- `Shade Reports Comparison PROD` contains only Project IDs classified as
+  `Production with other categories`, preserves each complete comparison
+  block, and reports no unexplained missing production comparison projects.
 - The **Triggers** page shows one
   `processRecentGoodLeapEmailsAndSyncPostHog` five-minute trigger and one
   `syncPostHogProjects` hourly trigger owned by the operating account.
@@ -1251,7 +1304,7 @@ new source record can remain temporarily unavailable in PostHog.
 
 1. Confirm that the target account receives the group messages in Gmail and
    can access the intended PostHog environment.
-2. Copy the nine `.gs` files into a new standalone Apps Script project.
+2. Copy the ten `.gs` files into a new standalone Apps Script project.
 3. Review the Gmail query, historical start date, and time zone.
 4. Obtain a new purpose-specific PostHog Personal API Key; do not reuse another
    person's key.

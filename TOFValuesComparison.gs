@@ -334,6 +334,10 @@ function syncTOFValuesComparisonsForSpreadsheet_(spreadsheet, options) {
     );
   }).length;
   stats.nextExistingScanCursor = selected.nextCursor;
+  if (typeof refreshShadeReportsComparisonProdSafely_ === 'function') {
+    stats.shadeReportsComparisonProd =
+      refreshShadeReportsComparisonProdSafely_(spreadsheet);
+  }
   return stats;
 }
 

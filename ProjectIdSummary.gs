@@ -189,6 +189,10 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
   result.sheet = PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME;
   result.updated = !unchanged;
   result.unchanged = unchanged;
+  if (typeof refreshShadeReportsComparisonProdSafely_ === 'function') {
+    result.shadeReportsComparisonProd =
+      refreshShadeReportsComparisonProdSafely_(spreadsheet);
+  }
   return result;
 }
 
