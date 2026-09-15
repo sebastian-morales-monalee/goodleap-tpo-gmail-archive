@@ -38,7 +38,7 @@ const TOF_COMPARISON_CONFIG = {
   SUPPORT_HEADER_BACKGROUND: '#4b5563',
   ERROR_HEADER_BACKGROUND: '#9c1c1c',
   DATE_FORMAT: 'yyyy-mm-dd hh:mm:ss',
-  ALGORITHM_VERSION: 'tof-comparison-v2-panel-first',
+  ALGORITHM_VERSION: 'tof-comparison-v5-all-source-geometry-averages',
   MANUAL_BATCH_SIZE: 10,
   AUTOMATIC_BATCH_SIZE: 5,
   AUTOMATIC_EXISTING_SCAN_SIZE: 3,
@@ -656,18 +656,20 @@ function buildTOFComparisonForCandidate_(candidate) {
     '',
   ));
   rowOrder += 1;
-  rows.push(buildTOFComparisonRow_(
+  const recalculatedRow = buildTOFComparisonRow_(
     candidate,
     calculateTOFWeightedAggregate_(pdf.rows),
     calculateTOFWeightedAggregate_(project.rows),
     overallStatus,
     'Recalculated Weighted Average',
     '',
-    'Panel-count-weighted values recalculated from every original Aurora and Artemis array row.',
+    'Panel-count-weighted TOF values and arithmetic-mean geometry values recalculated from every original Aurora and Artemis array row.',
     signature,
     rowOrder,
     '',
-  ));
+  );
+  applyTOFAverageGeometryValues_(recalculatedRow, pdf.rows, project.rows);
+  rows.push(recalculatedRow);
 
   return {
     status: overallStatus,
@@ -1218,6 +1220,45 @@ function weightedTOFValue_(rows, accessor) {
     }
   });
   return denominator > 0 ? numerator / denominator : null;
+}
+
+/**
+ * Writes separate arithmetic means from every original Aurora and Artemis
+ * geometry row, then calculates each aggregate delta as Artemis mean minus
+ * Aurora mean. Matching status does not affect these source-level averages.
+ */
+function applyTOFAverageGeometryValues_(row, auroraRows, artemisRows) {
+  const headers = getTOFValuesComparisonHeaders_();
+  const auroraAzimuth = averageTOFMetricValues_(auroraRows, 'azimuth');
+  const artemisAzimuth = averageTOFMetricValues_(artemisRows, 'azimuth');
+  const auroraPitch = averageTOFMetricValues_(auroraRows, 'pitch');
+  const artemisPitch = averageTOFMetricValues_(artemisRows, 'pitch');
+  row[headers.indexOf('Aurora Azimuth')] = auroraAzimuth;
+  row[headers.indexOf('Artemis Azimuth')] = artemisAzimuth;
+  row[headers.indexOf('Delta Azimuth')] = toTOFDelta_(
+    auroraAzimuth,
+    artemisAzimuth,
+  );
+  row[headers.indexOf('Aurora Pitch')] = auroraPitch;
+  row[headers.indexOf('Artemis Pitch')] = artemisPitch;
+  row[headers.indexOf('Delta Pitch')] = toTOFDelta_(
+    auroraPitch,
+    artemisPitch,
+  );
+  return row;
+}
+
+function averageTOFMetricValues_(rows, field) {
+  return averageTOFValues_((rows || []).map((sourceRow) =>
+    sourceRow ? sourceRow[field] : null,
+  ));
+}
+
+function averageTOFValues_(values) {
+  const numericValues = (values || []).filter(Number.isFinite);
+  if (numericValues.length === 0) return '';
+  const total = numericValues.reduce((sum, value) => sum + value, 0);
+  return roundTOFNumber_(total / numericValues.length);
 }
 
 function buildTOFComparisonRow_(

@@ -410,6 +410,10 @@ It:
   annual Solar Access, annual TSRF, and Jan-Dec Solar Access.
 - Preserves published weighted averages and also recalculates
   panel-count-weighted annual and monthly values from all original rows.
+- Writes separate arithmetic means for all available original Aurora and
+  Artemis Azimuth and Pitch values in each project's `Recalculated Weighted
+  Average` row. Each aggregate Delta is Artemis mean minus Aurora mean. These
+  calculations do not depend on whether the arrays were matched.
 - Marks probable, grouped-probable, unmatched, incomplete, and invalid data
   for review instead of inventing an equivalence.
 - Uses content fingerprints and a bounded rotating scan so changed CSVs are
@@ -1233,7 +1237,9 @@ stop all PostHog calls while keeping Gmail automation, run
 - After the four source CSV links exist, `TOFValuesComparison.gs` compares the
   newest PDF Analysis source for each Project ID. It writes deterministic
   Summary and Jan-Dec deltas, preserves both published and recalculated
-  weighted averages, and routes uncertain matches to human review.
+  weighted averages, adds separate source-level Aurora and Artemis geometry
+  means and their resulting deltas to the recalculated row, and routes uncertain
+  matches to human review.
 - New PDF rows store total PDF panel and array counts directly from the
   structured extraction. Project synchronization stores the corresponding
   active project panel and array counts directly from PostHog data. Historical
