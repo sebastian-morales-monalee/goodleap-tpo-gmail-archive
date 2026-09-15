@@ -14,9 +14,10 @@
  *   4) inspectPostHogGoodLeapDatabaseSchema()
  *   5) previewPostHogProjectMatches()
  *   6) syncPostHogProjects()
- *   7) setupProjectIdSummary()
- *   8) setupTOFValuesComparison()
- *   9) installHybridGoodLeapPostHogTriggers()
+ *   7) previewProjectIdSummaryMapData()
+ *   8) setupProjectIdSummary()
+ *   9) setupTOFValuesComparison()
+ *  10) installHybridGoodLeapPostHogTriggers()
  *
  * The preview and schema inspection functions do not write project results.
  * No PostHog API key is stored in this source file or in Google Sheets.
@@ -39,11 +40,18 @@ const POSTHOG_SYNC_CONFIG = {
   DEFAULT_FALLBACK_PROJECTS_TABLE: 'artemis_sales_postgres_projects',
   DEFAULT_FALLBACK_ORGANIZATIONS_TABLE:
     'artemis_sales_postgres_organizations',
+  DEFAULT_MAP_SOURCE_TABLE: 'goodleap_postgres_projectmapsources',
+  DEFAULT_FALLBACK_MAP_SOURCE_TABLE:
+    'artemis_sales_postgres_projectmapsources',
   DEFAULT_APPLICATION_ID_FIELD: 'application_id',
   DEFAULT_PROJECT_ID_FIELD: 'project_id',
   DEFAULT_SOURCE_UPDATED_AT_FIELD: 'updated_at',
   DEFAULT_PROJECT_ORGANIZATION_ID_FIELD: 'organization_id',
   DEFAULT_ORGANIZATION_NAME_FIELD: 'name',
+  DEFAULT_MAP_SOURCE_PROJECT_ID_FIELD: 'project_id',
+  DEFAULT_MAP_DATA_SOURCE_FIELD: 'map_data_source',
+  DEFAULT_RGB_BASEMAP_URL_FIELD: 'rgb_basemap_url',
+  DEFAULT_MAP_SOURCE_UPDATED_AT_FIELD: 'updated_at',
 
   // Existing GoodLeap records in this repository use this URL shape.
   DEFAULT_PROJECT_URL_PREFIX: 'https://goodleap.artemis.solar/projects/',
@@ -68,12 +76,19 @@ const POSTHOG_PROPERTY_KEYS = {
   FALLBACK_PROJECTS_TABLE: 'POSTHOG_ARTEMIS_SALES_PROJECTS_TABLE',
   FALLBACK_ORGANIZATIONS_TABLE:
     'POSTHOG_ARTEMIS_SALES_ORGANIZATIONS_TABLE',
+  MAP_SOURCE_TABLE: 'POSTHOG_GOODLEAP_PROJECT_MAP_SOURCES_TABLE',
+  FALLBACK_MAP_SOURCE_TABLE:
+    'POSTHOG_ARTEMIS_SALES_PROJECT_MAP_SOURCES_TABLE',
   APPLICATION_ID_FIELD: 'POSTHOG_APPLICATION_ID_FIELD',
   PROJECT_ID_FIELD: 'POSTHOG_GOODLEAP_PROJECT_ID_FIELD',
   SOURCE_UPDATED_AT_FIELD: 'POSTHOG_SOURCE_UPDATED_AT_FIELD',
   PROJECT_ORGANIZATION_ID_FIELD:
     'POSTHOG_ARTEMIS_SALES_PROJECT_ORGANIZATION_ID_FIELD',
   ORGANIZATION_NAME_FIELD: 'POSTHOG_ARTEMIS_SALES_ORGANIZATION_NAME_FIELD',
+  MAP_SOURCE_PROJECT_ID_FIELD: 'POSTHOG_MAP_SOURCE_PROJECT_ID_FIELD',
+  MAP_DATA_SOURCE_FIELD: 'POSTHOG_MAP_DATA_SOURCE_FIELD',
+  RGB_BASEMAP_URL_FIELD: 'POSTHOG_RGB_BASEMAP_URL_FIELD',
+  MAP_SOURCE_UPDATED_AT_FIELD: 'POSTHOG_MAP_SOURCE_UPDATED_AT_FIELD',
   PROJECT_URL_PREFIX: 'POSTHOG_PROJECT_URL_PREFIX',
   FALLBACK_PROJECT_URL_PREFIX: 'POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX',
   PROJECT_URL_SUFFIX: 'POSTHOG_PROJECT_URL_SUFFIX',
@@ -150,6 +165,10 @@ function setupPostHogProjectSync() {
     `Artemis Sales organizations table: ` +
     `${settings.fallbackOrganizationsTable}`,
   );
+  console.log(`GoodLeap map source table: ${settings.mapSourceTable}`);
+  console.log(
+    `Artemis Sales map source table: ${settings.fallbackMapSourceTable}`,
+  );
   console.log(`GoodLeap project URL prefix: ${settings.projectUrlPrefix}`);
   console.log(
     `Artemis Sales project URL prefix: ${settings.fallbackProjectUrlPrefix}`,
@@ -167,6 +186,8 @@ function setupPostHogProjectSync() {
     fallbackLookupTable: settings.fallbackLookupTable,
     fallbackProjectsTable: settings.fallbackProjectsTable,
     fallbackOrganizationsTable: settings.fallbackOrganizationsTable,
+    mapSourceTable: settings.mapSourceTable,
+    fallbackMapSourceTable: settings.fallbackMapSourceTable,
     applicationIdField: settings.applicationIdField,
     projectIdField: settings.projectIdField,
   };
@@ -662,6 +683,7 @@ function syncPostHogProjects() {
     if (typeof refreshProjectIdSummarySafely_ === 'function') {
       stats.projectIdSummary = refreshProjectIdSummarySafely_(
         resources.spreadsheet,
+        {refreshMapData: true},
       );
     }
     SpreadsheetApp.flush();
@@ -695,6 +717,7 @@ function syncProjectIdsToAnalysisSheets() {
     if (typeof refreshProjectIdSummarySafely_ === 'function') {
       stats.projectIdSummary = refreshProjectIdSummarySafely_(
         resources.spreadsheet,
+        {refreshMapData: true},
       );
     }
     SpreadsheetApp.flush();
@@ -897,6 +920,14 @@ function getPostHogSettings_() {
       POSTHOG_PROPERTY_KEYS.FALLBACK_ORGANIZATIONS_TABLE,
     ) || POSTHOG_SYNC_CONFIG.DEFAULT_FALLBACK_ORGANIZATIONS_TABLE,
   ).trim();
+  const mapSourceTable = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.MAP_SOURCE_TABLE) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_MAP_SOURCE_TABLE,
+  ).trim();
+  const fallbackMapSourceTable = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.FALLBACK_MAP_SOURCE_TABLE) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_FALLBACK_MAP_SOURCE_TABLE,
+  ).trim();
   const applicationIdField = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.APPLICATION_ID_FIELD) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_APPLICATION_ID_FIELD,
@@ -917,6 +948,22 @@ function getPostHogSettings_() {
   const organizationNameField = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.ORGANIZATION_NAME_FIELD) ||
       POSTHOG_SYNC_CONFIG.DEFAULT_ORGANIZATION_NAME_FIELD,
+  ).trim();
+  const mapSourceProjectIdField = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.MAP_SOURCE_PROJECT_ID_FIELD) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_MAP_SOURCE_PROJECT_ID_FIELD,
+  ).trim();
+  const mapDataSourceField = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.MAP_DATA_SOURCE_FIELD) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_MAP_DATA_SOURCE_FIELD,
+  ).trim();
+  const rgbBasemapUrlField = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.RGB_BASEMAP_URL_FIELD) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_RGB_BASEMAP_URL_FIELD,
+  ).trim();
+  const mapSourceUpdatedAtField = String(
+    properties.getProperty(POSTHOG_PROPERTY_KEYS.MAP_SOURCE_UPDATED_AT_FIELD) ||
+      POSTHOG_SYNC_CONFIG.DEFAULT_MAP_SOURCE_UPDATED_AT_FIELD,
   ).trim();
   const projectUrlPrefix = String(
     properties.getProperty(POSTHOG_PROPERTY_KEYS.PROJECT_URL_PREFIX) ||
@@ -961,6 +1008,8 @@ function getPostHogSettings_() {
     fallbackLookupTable,
     fallbackProjectsTable,
     fallbackOrganizationsTable,
+    mapSourceTable,
+    fallbackMapSourceTable,
   ].forEach((table) => {
     if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(table)) {
       throw new Error(
@@ -975,6 +1024,10 @@ function getPostHogSettings_() {
     sourceUpdatedAtField,
     projectOrganizationIdField,
     organizationNameField,
+    mapSourceProjectIdField,
+    mapDataSourceField,
+    rgbBasemapUrlField,
+    mapSourceUpdatedAtField,
   ].forEach((field) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field)) {
       throw new Error(`The configured PostHog field is not safe: ${field}.`);
@@ -1001,11 +1054,17 @@ function getPostHogSettings_() {
     fallbackLookupTable,
     fallbackProjectsTable,
     fallbackOrganizationsTable,
+    mapSourceTable,
+    fallbackMapSourceTable,
     applicationIdField,
     projectIdField,
     sourceUpdatedAtField,
     projectOrganizationIdField,
     organizationNameField,
+    mapSourceProjectIdField,
+    mapDataSourceField,
+    rgbBasemapUrlField,
+    mapSourceUpdatedAtField,
     projectUrlPrefix,
     fallbackProjectUrlPrefix,
     projectUrlSuffix,

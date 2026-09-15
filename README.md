@@ -201,7 +201,8 @@ It:
   complete history, and the eight most recent individual weekly charts, for a
   maximum of ten charts in `AI Dashboard`.
 - Shows the count inside each segment of the stacked chart, with a descriptive
-  legend for both series.
+  legend for both series. Production labels use a persistent high-contrast
+  cyan color so weekly values remain visible after chart rebuilds.
 - Keeps each category in a stable matrix column and chart color. Categories
   outside the configured taxonomy are appended deterministically for review.
 - Keeps weekly chart positions fixed. During a visible week, source-range
@@ -231,16 +232,24 @@ It:
   the correct GoodLeap or Artemis Sales domain.
 - Counts associated rows in `AI Analysis`, `Attachments`, and `PDF Analysis`.
 - Shows the first and most recent `Email Received At` value for each project.
+- Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
+  source table, with Artemis Sales as fallback, and keeps the RGB URL
+  clickable.
+- Queries map metadata in batches only for new projects or rows whose map
+  metadata is still incomplete. Previous successful values survive temporary
+  PostHog errors.
 - Omits Application ID and Organization from the reader-facing output.
 - Sorts projects by Email Count and then by the most recent email.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
-  workflows without adding another trigger or making external API calls.
+  workflows without adding another trigger. PostHog map lookups run only from
+  the manual Project ID Summary refresh and the existing PostHog workflows.
 
 Primary functions:
 
-1. `previewProjectIdSummary()`
-2. `setupProjectIdSummary()`
-3. `refreshProjectIdSummary()`
+1. `previewProjectIdSummaryMapData()`
+2. `previewProjectIdSummary()`
+3. `setupProjectIdSummary()`
+4. `refreshProjectIdSummary()`
 
 ### `OpenAIPdfExtraction.gs`
 
@@ -492,11 +501,17 @@ Optional properties:
 | `POSTHOG_ARTEMIS_SALES_LOOKUP_TABLE` | `artemis_sales_postgres_financiers` | Fallback warehouse lookup table |
 | `POSTHOG_ARTEMIS_SALES_PROJECTS_TABLE` | `artemis_sales_postgres_projects` | Sales projects table |
 | `POSTHOG_ARTEMIS_SALES_ORGANIZATIONS_TABLE` | `artemis_sales_postgres_organizations` | Sales organizations table |
+| `POSTHOG_GOODLEAP_PROJECT_MAP_SOURCES_TABLE` | `goodleap_postgres_projectmapsources` | GoodLeap map metadata table |
+| `POSTHOG_ARTEMIS_SALES_PROJECT_MAP_SOURCES_TABLE` | `artemis_sales_postgres_projectmapsources` | Sales fallback map metadata table |
 | `POSTHOG_APPLICATION_ID_FIELD` | `application_id` | Financier Application ID field |
 | `POSTHOG_GOODLEAP_PROJECT_ID_FIELD` | `project_id` | Artemis Project ID field |
 | `POSTHOG_SOURCE_UPDATED_AT_FIELD` | `updated_at` | Source freshness field |
 | `POSTHOG_ARTEMIS_SALES_PROJECT_ORGANIZATION_ID_FIELD` | `organization_id` | Sales project-to-organization field |
 | `POSTHOG_ARTEMIS_SALES_ORGANIZATION_NAME_FIELD` | `name` | Sales organization display field |
+| `POSTHOG_MAP_SOURCE_PROJECT_ID_FIELD` | `project_id` | Project identifier in map-source tables |
+| `POSTHOG_MAP_DATA_SOURCE_FIELD` | `map_data_source` | RGB imagery provider field |
+| `POSTHOG_RGB_BASEMAP_URL_FIELD` | `rgb_basemap_url` | RGB basemap URL field |
+| `POSTHOG_MAP_SOURCE_UPDATED_AT_FIELD` | `updated_at` | Map metadata freshness field |
 | `POSTHOG_PROJECT_URL_PREFIX` | `https://goodleap.artemis.solar/projects/` | URL prefix |
 | `POSTHOG_ARTEMIS_SALES_PROJECT_URL_PREFIX` | `https://sales.artemis.solar/projects/` | Sales fallback URL prefix |
 | `POSTHOG_PROJECT_URL_SUFFIX` | `/proposal` | URL suffix |
@@ -557,7 +572,7 @@ complete function order is:
 | 19 | `testPostHogSolarTableConnection()` | `PostHogSolarTables.gs` | Verify both GoodLeap and Sales project/panel schemas |
 | 20 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
 | 21 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
-| 22 | `setupProjectIdSummary()` | `ProjectIdSummary.gs` | Create the project-level email, attachment, and PDF rollup |
+| 22 | `setupProjectIdSummary()` | `ProjectIdSummary.gs` | Create the project-level rollup and backfill map source metadata |
 | 23 | `previewTOFValuesComparison()` | `TOFValuesComparison.gs` | Preview deterministic Aurora-versus-Artemis matching without writing the comparison sheet |
 | 24 | `setupTOFValuesComparison()` | `TOFValuesComparison.gs` | Create and format the managed comparison sheet |
 | 25 | `syncPendingTOFValuesComparisons()` | `TOFValuesComparison.gs` | Process one bounded historical comparison batch; rerun until pendingProjects is zero |
@@ -851,22 +866,24 @@ No new Script Property or trigger is required.
 
 No new Script Property or trigger is required.
 
-1. Create `ProjectIdSummary.gs` in the same Apps Script project and paste the
-   repository version.
-2. Replace `OpenAIAnalysis.gs`, `OpenAIPdfExtraction.gs`, and `PostHogSync.gs`
-   with the repository versions so their existing workflows refresh the
-   summary safely.
+1. Replace `ProjectIdSummary.gs`, `PostHogSync.gs`, and
+   `AIAnalysisDashboard.gs` with the repository versions.
+2. Keep the existing `OpenAIAnalysis.gs` and `OpenAIPdfExtraction.gs`; their
+   safe summary refresh calls remain compatible with the new columns.
 3. Save the Apps Script project.
-4. Open `ProjectIdSummary.gs` and run `previewProjectIdSummary()`. Confirm that
-   the logged unique-project, email-row, and PDF-row totals match the source
-   sheets. The preview does not write the summary.
-5. Run `setupProjectIdSummary()` once. Confirm that `Project ID Summary`
-   contains exactly these columns: `Project ID`, `Project URL`, `Email Count`,
-   `Attachment Count`, `Analyzed PDF Count`, `First Email Received At`, and
-   `Last Email Received At`.
-6. Run `refreshProjectIdSummary()` a second time. The expected result includes
+4. Open `ProjectIdSummary.gs` and run `previewProjectIdSummaryMapData()`.
+   Confirm that known GoodLeap and Sales projects show the expected lookup
+   source, map data source, and RGB URL. The preview does not write the sheet.
+5. Run `previewProjectIdSummary()`. Confirm that the logged unique-project,
+   email-row, and PDF-row totals match the source sheets.
+6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source` and
+   `RGB Basemap URL` to the legacy seven-column layout and backfills incomplete
+   historical projects. Confirm that the RGB URLs are clickable.
+7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
-7. Do not reinstall or edit triggers. The current five-minute and hourly
+8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
+   with the persistent visible Production data-label color.
+9. Do not reinstall or edit triggers. The current five-minute and hourly
    workflows discover the new summary functions from the shared Apps Script
    runtime.
 
@@ -1125,8 +1142,9 @@ stop all PostHog calls while keeping Gmail automation, run
   same visible weeks.
 - `ProjectIdSummary.gs` maintains one row per resolved project with its
   authoritative URL, email count, attachment count, analyzed-PDF count, and
-  first and most recent email timestamps. It refreshes after the AI email,
-  PDF, and PostHog workflows and does not require another trigger.
+  first and most recent email timestamps. It also resolves map data source and
+  RGB basemap URL from GoodLeap with Artemis Sales fallback. It refreshes after
+  the AI email, PDF, and PostHog workflows and does not require another trigger.
 - An OpenAI error is written to that message's analysis row and does not block
   the following PostHog synchronization. Failed rows require an explicit
   reviewed retry.
@@ -1195,8 +1213,9 @@ The deployment is ready only when all of the following are true:
 - `AI Analysis` and `PDF Analysis` contain the same Project ID shown for their
   Application ID in `PostHog Projects`, or remain blank when it is `Not Found`.
 - `Project ID Summary` contains one row per resolved Project ID, uses the URL
-  from `PostHog Projects`, and reconciles its email and PDF counts with the two
-  analysis sheets.
+  from `PostHog Projects`, reconciles its email and PDF counts with the two
+  analysis sheets, and shows the PostHog map source plus a clickable RGB
+  basemap URL when available.
 - `TOF Values Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are

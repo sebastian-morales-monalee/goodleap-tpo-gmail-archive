@@ -68,6 +68,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   PRODUCTION_CATEGORY: 'Production',
   PRODUCTION_SERIES_LABEL: 'Production with other categories',
   OTHER_CATEGORIES_LABEL: 'Other Categories without Production',
+  PRODUCTION_DATA_LABEL_COLOR: '#00ffff',
   TITLE: 'AI Analysis - Primary Category Dashboard',
   TIME_ZONE: 'America/Bogota',
   WEEKLY_CHART_LIMIT: 8,
@@ -77,7 +78,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   CHART_COLUMN: 5,
   STACKED_CHART_COLUMN: 15,
   LAYOUT_NOTE:
-    'Managed AI Dashboard layout v6: labeled Categories-based Production trend and Primary Category charts.',
+    'Managed AI Dashboard layout v7: visible labeled Categories-based Production trend and Primary Category charts.',
   HEADER_COLOR: '#6e04bd',
   HEADER_TEXT_COLOR: '#ffffff',
   CHART_COLOR: '#4285f4',
@@ -1126,7 +1127,7 @@ function insertAIWeeklyStackedChart_(dashboardSheet, weeklySheet, chartMatrix) {
       dataLabel: 'value',
       annotations: {
         textStyle: {
-          color: '#ffffff',
+          color: AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_DATA_LABEL_COLOR,
           fontSize: 18,
           bold: true,
           auraColor: 'none',
