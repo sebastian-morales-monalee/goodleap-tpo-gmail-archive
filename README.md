@@ -236,12 +236,14 @@ It:
 - Shows the first and most recent `Email Received At` value for each project.
 - Selects the matching `AI Analysis` row with the most recent valid `Email
   Received At` value, using the last sheet occurrence to break exact timestamp
-  ties. It copies that row's `Proposed Production kWh`, `Benchmark Production
-  kWh`, and `Tolerance %` values together into columns K:N.
+  ties. It copies that row's `Gmail Message ID`, `Required Evidence`, `Technical
+  Notes`, and `AI Summary` into J:M, plus `Email Received At`, `Proposed
+  Production kWh`, `Benchmark Production kWh`, and `Tolerance %` into N:Q.
 - Assigns each project to `Production with other categories` when at least one
   of its categorized emails contains the exact `Production` value in
   `Categories`; otherwise it uses `Other Categories without Production`.
-  Projects without a categorized email remain blank.
+  Projects without a categorized email remain blank. The group occupies column
+  R, immediately before the Shade Report Delta columns.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
@@ -256,7 +258,7 @@ It:
   `last_status_updated_at`, and `design_updated_at` from the GoodLeap projects
   table, with Artemis Sales as fallback. The corresponding `Engine Version`,
   `Created At`, `Updated At`, `Last Status Updated At`, and `Design Updated At`
-  columns occupy AJ:AN and retain prior successful values after temporary
+  columns occupy AN:AR and retain prior successful values after temporary
   PostHog query failures.
 - Sorts projects by Email Count and then by the most recent email.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
@@ -930,16 +932,16 @@ No new Script Property or trigger is required.
 5. Run `previewProjectIdSummary()`. Confirm that the logged unique-project,
    email-row, and PDF-row totals match the source sheets.
 6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source`,
-   `RGB Basemap URL`, `Production Category Group`, the latest AI email and
-   production values, and the Shade Report Delta columns plus `Absolute Delta
-   Azimuth`, `Absolute Delta Pitch`, `Absolute Azimuth + Pitch`, `Engine
-   Version`, `Created At`, `Updated At`, `Last Status Updated At`, and `Design
-   Updated At` to legacy layouts and backfills historical projects. Confirm
-   that RGB URLs are clickable, the group matches the `Categories` values in
-   `AI Analysis`, the latest AI values all come from the newest matching email,
-   Delta values match the `Recalculated Weighted Average` rows in `Shade
-   Reports Comparison`, the three absolute metrics are calculated, and the
-   project metadata matches PostHog.
+   `RGB Basemap URL`, the latest Gmail context and AI production values,
+   `Production Category Group`, and the Shade Report Delta columns plus
+   `Absolute Delta Azimuth`, `Absolute Delta Pitch`, `Absolute Azimuth + Pitch`,
+   `Engine Version`, `Created At`, `Updated At`, `Last Status Updated At`, and
+   `Design Updated At` to legacy layouts and backfills historical projects.
+   Confirm that RGB URLs are clickable, the group matches the `Categories`
+   values in `AI Analysis`, every latest AI field comes from the same newest
+   matching email, Delta values match the `Recalculated Weighted Average` rows
+   in `Shade Reports Comparison`, the three absolute metrics are calculated,
+   and the project metadata matches PostHog.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
 8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
@@ -1310,10 +1312,12 @@ The deployment is ready only when all of the following are true:
   basemap URL when available. Its `Production Category Group` uses the same
   exact `Categories`-based Production rule as the weekly dashboard. Its Delta
   columns reproduce each project's `Recalculated Weighted Average` values from
-  `Shade Reports Comparison`. Columns K:N reproduce the date and three
-  production values from the newest matching `AI Analysis` row. The three
+  `Shade Reports Comparison`. Columns J:M reproduce the Gmail Message ID and
+  three contextual AI fields, while N:Q reproduce the date and three production
+  values from the same newest matching `AI Analysis` row. `Production Category
+  Group` occupies R. The three
   highlighted absolute columns show the absolute Azimuth Delta, absolute Pitch
-  Delta, and their sum. Columns AJ:AN show the project engine version and four
+  Delta, and their sum. Columns AN:AR show the project engine version and four
   project lifecycle timestamps from the GoodLeap or Artemis Sales project
   record.
 - `Shade Reports Comparison` contains no duplicate Project ID blocks and its
