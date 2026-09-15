@@ -14,8 +14,12 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   AI_SHEET_NAME: 'AI Analysis',
   PDF_SHEET_NAME: 'PDF Analysis',
   ATTACHMENTS_SHEET_NAME: 'Attachments',
+  COMPARISON_SHEET_NAME: 'Shade Reports Comparison',
+  COMPARISON_MATCH_TYPE: 'Recalculated Weighted Average',
   HEADER_BACKGROUND: '#7200c9',
   HEADER_FONT_COLOR: '#ffffff',
+  DELTA_HEADER_BACKGROUND: '#b45f06',
+  DELTA_DATA_BACKGROUND: '#fff2cc',
   TAB_COLOR: '#7200c9',
   DATE_FORMAT: 'yyyy-mm-dd hh:mm:ss',
   MAP_QUERY_BATCH_SIZE: 100,
@@ -25,6 +29,27 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   PRODUCTION_GROUP_LABEL: 'Production with other categories',
   OTHER_CATEGORIES_GROUP_LABEL: 'Other Categories without Production',
 };
+
+const PROJECT_ID_SUMMARY_DELTA_HEADERS = [
+  'Delta Panel Count',
+  'Delta Azimuth',
+  'Delta Pitch',
+  'Delta Annual TOF (pp)',
+  'Delta Annual Solar Access (pp)',
+  'Delta Annual TSRF (pp)',
+  'Delta Jan (pp)',
+  'Delta Feb (pp)',
+  'Delta Mar (pp)',
+  'Delta Apr (pp)',
+  'Delta May (pp)',
+  'Delta Jun (pp)',
+  'Delta Jul (pp)',
+  'Delta Aug (pp)',
+  'Delta Sep (pp)',
+  'Delta Oct (pp)',
+  'Delta Nov (pp)',
+  'Delta Dec (pp)',
+];
 
 const PROJECT_ID_SUMMARY_HEADERS = [
   'Project ID',
@@ -37,7 +62,7 @@ const PROJECT_ID_SUMMARY_HEADERS = [
   'Map Data Source',
   'RGB Basemap URL',
   'Production Category Group',
-];
+].concat(PROJECT_ID_SUMMARY_DELTA_HEADERS);
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1 = [
   'Project ID',
@@ -59,6 +84,19 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V2 = [
   'Last Email Received At',
   'Map Data Source',
   'RGB Basemap URL',
+];
+
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3 = [
+  'Project ID',
+  'Project URL',
+  'Email Count',
+  'Attachment Count',
+  'Analyzed PDF Count',
+  'First Email Received At',
+  'Last Email Received At',
+  'Map Data Source',
+  'RGB Basemap URL',
+  'Production Category Group',
 ];
 
 /**
@@ -124,6 +162,13 @@ function previewProjectIdSummary() {
     mapDataSource: row[7] || '',
     rgbBasemapUrl: row[8] || '',
     productionCategoryGroup: row[9] || '',
+    shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
+      (result, header, offset) => {
+        result[header] = row[10 + offset];
+        return result;
+      },
+      {},
+    ),
   }));
   console.log(JSON.stringify(result, null, 2));
   console.log('Preview completed without writing Project ID Summary.');
@@ -204,6 +249,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
     PROJECT_ID_SUMMARY_CONFIG.PDF_SHEET_NAME,
   );
   const attachmentCounts = loadProjectIdSummaryAttachmentCounts_(spreadsheet);
+  const comparisonDeltas = loadProjectIdSummaryComparisonDeltas_(spreadsheet);
   const existingMapData = options && options.existingMapData
     ? options.existingMapData
     : new Map();
@@ -222,6 +268,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
   let projectsWithoutEmails = 0;
   let projectsWithoutPdfs = 0;
   let projectsWithoutAttachments = 0;
+  let projectsWithoutComparisonDeltas = 0;
 
   projects.forEach((project) => {
     const email = emailMetrics.get(project.key) || {
@@ -243,6 +290,11 @@ function buildProjectIdSummary_(spreadsheet, options) {
 
     const refreshedMapData = mapLookup.byProjectId.get(project.key);
     const mapData = refreshedMapData || existingMapData.get(project.key) || {};
+    const deltaValues = comparisonDeltas.get(project.key) ||
+      Array(PROJECT_ID_SUMMARY_DELTA_HEADERS.length).fill('');
+    if (!comparisonDeltas.has(project.key)) {
+      projectsWithoutComparisonDeltas += 1;
+    }
 
     rows.push([
       project.projectId,
@@ -255,7 +307,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       mapData.mapDataSource || '',
       mapData.rgbBasemapUrl || '',
       getProjectIdSummaryCategoryGroup_(email),
-    ]);
+    ].concat(deltaValues));
   });
 
   rows.sort((left, right) => {
@@ -272,6 +324,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
     projectsWithoutEmails,
     projectsWithoutPdfs,
     projectsWithoutAttachments,
+    projectsWithoutComparisonDeltas,
     sourceProjectCount: projects.length,
     emailRowsWithProjectId: Array.from(emailMetrics.values()).reduce(
       (sum, metric) => sum + metric.count,
@@ -299,6 +352,9 @@ function buildProjectIdSummaryStats_(summary) {
     projectsWithoutEmails: summary.projectsWithoutEmails,
     projectsWithoutPdfs: summary.projectsWithoutPdfs,
     projectsWithoutAttachments: summary.projectsWithoutAttachments,
+    projectsWithComparisonDeltas:
+      summary.rows.length - summary.projectsWithoutComparisonDeltas,
+    projectsWithoutComparisonDeltas: summary.projectsWithoutComparisonDeltas,
     projectsWithMapDataSource: summary.rows.filter((row) => row[7]).length,
     projectsWithRgbBasemapUrl: summary.rows.filter((row) => row[8]).length,
     projectsWithProduction: summary.rows.filter(
@@ -675,6 +731,50 @@ function loadProjectIdSummaryAttachmentCounts_(spreadsheet) {
   return counts;
 }
 
+/**
+ * Loads the final Delta values from each project's recalculated comparison row.
+ * Values remain blank when the comparison row or individual metric is missing.
+ */
+function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
+  const byProjectId = new Map();
+  const sheet = spreadsheet.getSheetByName(
+    PROJECT_ID_SUMMARY_CONFIG.COMPARISON_SHEET_NAME,
+  );
+  if (!sheet || sheet.getLastRow() < 2) return byProjectId;
+
+  const values = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const projectIdIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Project ID',
+    sheet.getName(),
+  );
+  const matchTypeIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Match Type',
+    sheet.getName(),
+  );
+  const deltaIndexes = PROJECT_ID_SUMMARY_DELTA_HEADERS.map((header) =>
+    requireProjectIdSummaryHeader_(headers, header, sheet.getName()),
+  );
+
+  values.slice(1).forEach((row) => {
+    const matchType = String(row[matchTypeIndex] || '').trim();
+    if (matchType !== PROJECT_ID_SUMMARY_CONFIG.COMPARISON_MATCH_TYPE) return;
+    const projectId = String(row[projectIdIndex] || '').trim().toLowerCase();
+    if (!isProjectIdSummaryUuid_(projectId)) return;
+    byProjectId.set(
+      projectId,
+      deltaIndexes.map((index) =>
+        Number.isFinite(row[index]) ? row[index] : '',
+      ),
+    );
+  });
+  return byProjectId;
+}
+
 function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   let sheet = spreadsheet.getSheetByName(
     PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME,
@@ -704,6 +804,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -720,7 +824,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   ) {
     console.log(
       'Project ID Summary schema upgraded: Map Data Source, RGB Basemap URL, ' +
-      'and Production Category Group were appended.',
+      'Production Category Group, and Shade Report Deltas were appended.',
     );
   } else if (
     projectIdSummaryHeadersMatch_(
@@ -729,7 +833,17 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     )
   ) {
     console.log(
-      'Project ID Summary schema upgraded: Production Category Group was appended.',
+      'Project ID Summary schema upgraded: Production Category Group and ' +
+      'Shade Report Delta columns were appended.',
+    );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3,
+    )
+  ) {
+    console.log(
+      'Project ID Summary schema upgraded: Shade Report Delta columns were appended.',
     );
   }
 
@@ -741,6 +855,15 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     .setFontWeight('bold')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle');
+  const deltaStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length + 1;
+  sheet
+    .getRange(
+      1,
+      deltaStartColumn,
+      1,
+      PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
+    )
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_HEADER_BACKGROUND);
   sheet.setFrozenRows(1);
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
   sheet.setColumnWidth(1, 280);
@@ -750,6 +873,11 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(8, 180);
   sheet.setColumnWidth(9, 520);
   sheet.setColumnWidth(10, 260);
+  sheet.setColumnWidths(
+    deltaStartColumn,
+    PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
+    135,
+  );
   return sheet;
 }
 
@@ -804,6 +932,17 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
   sheet.getRange(2, 1, rows.length, 2).setWrap(false);
   sheet.getRange(2, 8, rows.length, 2).setWrap(false);
   sheet.getRange(2, 10, rows.length, 1).setWrap(false);
+  const deltaStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length + 1;
+  sheet
+    .getRange(
+      2,
+      deltaStartColumn,
+      rows.length,
+      PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
+    )
+    .setNumberFormat('0.####')
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_DATA_BACKGROUND)
+    .setWrap(false);
 
   const richUrls = rows.map((row) => {
     const url = String(row[1] || '').trim();

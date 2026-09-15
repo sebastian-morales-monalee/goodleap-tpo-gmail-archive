@@ -245,6 +245,9 @@ It:
   metadata is still incomplete. Previous successful values survive temporary
   PostHog errors.
 - Omits Application ID and Organization from the reader-facing output.
+- Copies Delta Panel Count, aggregate Azimuth and Pitch deltas, annual TOF,
+  Solar Access, TSRF, and Jan-Dec deltas from each project's `Recalculated
+  Weighted Average` row in `Shade Reports Comparison`.
 - Sorts projects by Email Count and then by the most recent email.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
   workflows without adding another trigger. PostHog map lookups run only from
@@ -903,8 +906,8 @@ No new Script Property or trigger is required.
 
 No new Script Property or trigger is required.
 
-1. Replace `ProjectIdSummary.gs`, `PostHogSync.gs`, and
-   `AIAnalysisDashboard.gs` with the repository versions.
+1. Replace `ProjectIdSummary.gs`, `TOFValuesComparison.gs`, `PostHogSync.gs`,
+   and `AIAnalysisDashboard.gs` with the repository versions.
 2. Keep the existing `OpenAIAnalysis.gs` and `OpenAIPdfExtraction.gs`; their
    safe summary refresh calls remain compatible with the new columns.
 3. Save the Apps Script project.
@@ -914,9 +917,11 @@ No new Script Property or trigger is required.
 5. Run `previewProjectIdSummary()`. Confirm that the logged unique-project,
    email-row, and PDF-row totals match the source sheets.
 6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source`,
-   `RGB Basemap URL`, and `Production Category Group` to legacy layouts and
-   backfills historical projects. Confirm that RGB URLs are clickable and that
-   the new group matches the `Categories` values in `AI Analysis`.
+   `RGB Basemap URL`, `Production Category Group`, and the Shade Report Delta
+   columns to legacy layouts and backfills historical projects. Confirm that
+   RGB URLs are clickable, the group matches the `Categories` values in
+   `AI Analysis`, and Delta values match the `Recalculated Weighted Average`
+   rows in `Shade Reports Comparison`.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
 8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
@@ -1285,7 +1290,9 @@ The deployment is ready only when all of the following are true:
   from `PostHog Projects`, reconciles its email and PDF counts with the two
   analysis sheets, and shows the PostHog map source plus a clickable RGB
   basemap URL when available. Its `Production Category Group` uses the same
-  exact `Categories`-based Production rule as the weekly dashboard.
+  exact `Categories`-based Production rule as the weekly dashboard. Its Delta
+  columns reproduce each project's `Recalculated Weighted Average` values from
+  `Shade Reports Comparison`.
 - `Shade Reports Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are

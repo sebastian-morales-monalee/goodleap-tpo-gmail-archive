@@ -334,7 +334,12 @@ function syncTOFValuesComparisonsForSpreadsheet_(spreadsheet, options) {
     );
   }).length;
   stats.nextExistingScanCursor = selected.nextCursor;
-  if (typeof refreshShadeReportsComparisonProdSafely_ === 'function') {
+  if (typeof refreshProjectIdSummarySafely_ === 'function') {
+    stats.projectIdSummary = refreshProjectIdSummarySafely_(
+      spreadsheet,
+      {refreshMapData: false},
+    );
+  } else if (typeof refreshShadeReportsComparisonProdSafely_ === 'function') {
     stats.shadeReportsComparisonProd =
       refreshShadeReportsComparisonProdSafely_(spreadsheet);
   }
