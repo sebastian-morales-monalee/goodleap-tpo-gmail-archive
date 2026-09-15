@@ -21,6 +21,9 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   MAP_QUERY_BATCH_SIZE: 100,
   MAX_PROJECT_IDS_PER_SYNC: 5000,
   MAP_PREVIEW_LIMIT: 10,
+  PRODUCTION_CATEGORY: 'Production',
+  PRODUCTION_GROUP_LABEL: 'Production with other categories',
+  OTHER_CATEGORIES_GROUP_LABEL: 'Other Categories without Production',
 };
 
 const PROJECT_ID_SUMMARY_HEADERS = [
@@ -33,9 +36,10 @@ const PROJECT_ID_SUMMARY_HEADERS = [
   'Last Email Received At',
   'Map Data Source',
   'RGB Basemap URL',
+  'Production Category Group',
 ];
 
-const LEGACY_PROJECT_ID_SUMMARY_HEADERS = [
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1 = [
   'Project ID',
   'Project URL',
   'Email Count',
@@ -43,6 +47,18 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS = [
   'Analyzed PDF Count',
   'First Email Received At',
   'Last Email Received At',
+];
+
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V2 = [
+  'Project ID',
+  'Project URL',
+  'Email Count',
+  'Attachment Count',
+  'Analyzed PDF Count',
+  'First Email Received At',
+  'Last Email Received At',
+  'Map Data Source',
+  'RGB Basemap URL',
 ];
 
 /**
@@ -107,6 +123,7 @@ function previewProjectIdSummary() {
     lastEmailReceivedAt: row[6] || '',
     mapDataSource: row[7] || '',
     rgbBasemapUrl: row[8] || '',
+    productionCategoryGroup: row[9] || '',
   }));
   console.log(JSON.stringify(result, null, 2));
   console.log('Preview completed without writing Project ID Summary.');
@@ -205,6 +222,8 @@ function buildProjectIdSummary_(spreadsheet, options) {
   projects.forEach((project) => {
     const email = emailMetrics.get(project.key) || {
       count: 0,
+      categorizedCount: 0,
+      hasProduction: false,
       firstReceivedAt: '',
       lastReceivedAt: '',
     };
@@ -231,6 +250,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       email.lastReceivedAt,
       mapData.mapDataSource || '',
       mapData.rgbBasemapUrl || '',
+      getProjectIdSummaryCategoryGroup_(email),
     ]);
   });
 
@@ -253,6 +273,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
       (sum, metric) => sum + metric.count,
       0,
     ),
+    categorizedEmailRowsWithProjectId: Array.from(emailMetrics.values()).reduce(
+      (sum, metric) => sum + metric.categorizedCount,
+      0,
+    ),
     pdfRowsWithProjectId: Array.from(pdfCounts.values()).reduce(
       (sum, count) => sum + count,
       0,
@@ -265,12 +289,22 @@ function buildProjectIdSummaryStats_(summary) {
   return {
     uniqueProjects: summary.rows.length,
     emailRowsWithProjectId: summary.emailRowsWithProjectId,
+    categorizedEmailRowsWithProjectId:
+      summary.categorizedEmailRowsWithProjectId,
     pdfRowsWithProjectId: summary.pdfRowsWithProjectId,
     projectsWithoutEmails: summary.projectsWithoutEmails,
     projectsWithoutPdfs: summary.projectsWithoutPdfs,
     projectsWithoutAttachments: summary.projectsWithoutAttachments,
     projectsWithMapDataSource: summary.rows.filter((row) => row[7]).length,
     projectsWithRgbBasemapUrl: summary.rows.filter((row) => row[8]).length,
+    projectsWithProduction: summary.rows.filter(
+      (row) => row[9] === PROJECT_ID_SUMMARY_CONFIG.PRODUCTION_GROUP_LABEL,
+    ).length,
+    projectsWithoutProduction: summary.rows.filter(
+      (row) =>
+        row[9] === PROJECT_ID_SUMMARY_CONFIG.OTHER_CATEGORIES_GROUP_LABEL,
+    ).length,
+    projectsWithoutCategoryGroup: summary.rows.filter((row) => !row[9]).length,
     mapFoundInGoodLeap: summary.mapLookup.foundInGoodLeap,
     mapFoundInArtemisSales: summary.mapLookup.foundInArtemisSales,
     mapNotFound: summary.mapLookup.notFound,
@@ -511,18 +545,38 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
     'Email Received At',
     sheet.getName(),
   );
+  const primaryCategoryIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Primary Category',
+    sheet.getName(),
+  );
+  const categoriesIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Categories',
+    sheet.getName(),
+  );
 
   values.slice(1).forEach((row) => {
     const projectIds = splitProjectIdSummaryIds_(row[projectIdIndex]);
     const receivedAt = normalizeProjectIdSummaryDate_(row[receivedAtIndex]);
+    const primaryCategory = String(row[primaryCategoryIndex] || '').trim();
+    const isCategorized = Boolean(primaryCategory);
+    const includesProduction = isCategorized &&
+      projectIdSummaryCategoriesIncludeProduction_(row[categoriesIndex]);
     projectIds.forEach((projectId) => {
       const key = projectId.toLowerCase();
       const metric = metrics.get(key) || {
         count: 0,
+        categorizedCount: 0,
+        hasProduction: false,
         firstReceivedAt: '',
         lastReceivedAt: '',
       };
       metric.count += 1;
+      if (isCategorized) {
+        metric.categorizedCount += 1;
+        metric.hasProduction = metric.hasProduction || includesProduction;
+      }
       if (receivedAt) {
         if (
           !metric.firstReceivedAt ||
@@ -541,6 +595,33 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
     });
   });
   return metrics;
+}
+
+function getProjectIdSummaryCategoryGroup_(emailMetric) {
+  if (!emailMetric || Number(emailMetric.categorizedCount || 0) === 0) {
+    return '';
+  }
+  return emailMetric.hasProduction
+    ? PROJECT_ID_SUMMARY_CONFIG.PRODUCTION_GROUP_LABEL
+    : PROJECT_ID_SUMMARY_CONFIG.OTHER_CATEGORIES_GROUP_LABEL;
+}
+
+/** Uses the same exact multi-value matching rule as AI Dashboard. */
+function projectIdSummaryCategoriesIncludeProduction_(value) {
+  if (typeof doesAIAnalysisCategoriesIncludeProduction_ === 'function') {
+    return doesAIAnalysisCategoriesIncludeProduction_(value);
+  }
+  return String(value || '')
+    .split(/[\r\n,;|]+/)
+    .map((category) =>
+      category
+        .trim()
+        .replace(/^[-*\u2022]\s*/, '')
+        .replace(/^["'\[]+|["'\]]+$/g, '')
+        .trim()
+        .toLowerCase(),
+    )
+    .includes(PROJECT_ID_SUMMARY_CONFIG.PRODUCTION_CATEGORY.toLowerCase());
 }
 
 function loadProjectIdSummaryProjectCounts_(spreadsheet, sheetName) {
@@ -597,6 +678,12 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   if (!sheet) {
     sheet = spreadsheet.insertSheet(PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME);
   }
+  if (sheet.getMaxColumns() < PROJECT_ID_SUMMARY_HEADERS.length) {
+    sheet.insertColumnsAfter(
+      sheet.getMaxColumns(),
+      PROJECT_ID_SUMMARY_HEADERS.length - sheet.getMaxColumns(),
+    );
+  }
 
   const currentHeaders = sheet.getLastRow() > 0
     ? sheet
@@ -608,7 +695,11 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS) &&
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
-      LEGACY_PROJECT_ID_SUMMARY_HEADERS,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V2,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -620,11 +711,21 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   if (
     projectIdSummaryHeadersMatch_(
       currentHeaders,
-      LEGACY_PROJECT_ID_SUMMARY_HEADERS,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1,
     )
   ) {
     console.log(
-      'Project ID Summary schema upgraded: Map Data Source and RGB Basemap URL were appended.',
+      'Project ID Summary schema upgraded: Map Data Source, RGB Basemap URL, ' +
+      'and Production Category Group were appended.',
+    );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V2,
+    )
+  ) {
+    console.log(
+      'Project ID Summary schema upgraded: Production Category Group was appended.',
     );
   }
 
@@ -644,6 +745,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidths(6, 2, 180);
   sheet.setColumnWidth(8, 180);
   sheet.setColumnWidth(9, 520);
+  sheet.setColumnWidth(10, 260);
   return sheet;
 }
 
@@ -697,6 +799,7 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
     .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
   sheet.getRange(2, 1, rows.length, 2).setWrap(false);
   sheet.getRange(2, 8, rows.length, 2).setWrap(false);
+  sheet.getRange(2, 10, rows.length, 1).setWrap(false);
 
   const richUrls = rows.map((row) => {
     const url = String(row[1] || '').trim();

@@ -232,6 +232,10 @@ It:
   the correct GoodLeap or Artemis Sales domain.
 - Counts associated rows in `AI Analysis`, `Attachments`, and `PDF Analysis`.
 - Shows the first and most recent `Email Received At` value for each project.
+- Assigns each project to `Production with other categories` when at least one
+  of its categorized emails contains the exact `Production` value in
+  `Categories`; otherwise it uses `Other Categories without Production`.
+  Projects without a categorized email remain blank.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
@@ -876,9 +880,10 @@ No new Script Property or trigger is required.
    source, map data source, and RGB URL. The preview does not write the sheet.
 5. Run `previewProjectIdSummary()`. Confirm that the logged unique-project,
    email-row, and PDF-row totals match the source sheets.
-6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source` and
-   `RGB Basemap URL` to the legacy seven-column layout and backfills incomplete
-   historical projects. Confirm that the RGB URLs are clickable.
+6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source`,
+   `RGB Basemap URL`, and `Production Category Group` to legacy layouts and
+   backfills historical projects. Confirm that RGB URLs are clickable and that
+   the new group matches the `Categories` values in `AI Analysis`.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
 8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
@@ -1223,7 +1228,8 @@ The deployment is ready only when all of the following are true:
 - `Project ID Summary` contains one row per resolved Project ID, uses the URL
   from `PostHog Projects`, reconciles its email and PDF counts with the two
   analysis sheets, and shows the PostHog map source plus a clickable RGB
-  basemap URL when available.
+  basemap URL when available. Its `Production Category Group` uses the same
+  exact `Categories`-based Production rule as the weekly dashboard.
 - `Shade Reports Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are
