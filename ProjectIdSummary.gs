@@ -22,6 +22,7 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   DELTA_DATA_BACKGROUND: '#fff2cc',
   ABSOLUTE_DELTA_HEADER_BACKGROUND: '#7f6000',
   ABSOLUTE_DELTA_DATA_BACKGROUND: '#f9cb9c',
+  LATEST_AI_DATA_BACKGROUND: '#ffffff',
   PROJECT_METADATA_HEADER_BACKGROUND: '#38761d',
   PROJECT_METADATA_DATA_BACKGROUND: '#e2f0d9',
   TAB_COLOR: '#7200c9',
@@ -83,6 +84,13 @@ const PROJECT_ID_SUMMARY_POSTHOG_HEADERS = [
   'Design Updated At',
 ];
 
+const PROJECT_ID_SUMMARY_LATEST_AI_HEADERS = [
+  'Latest AI Email Received At',
+  'Proposed Production kWh',
+  'Benchmark Production kWh',
+  'Tolerance %',
+];
+
 const PROJECT_ID_SUMMARY_HEADERS = [
   'Project ID',
   'Project URL',
@@ -95,6 +103,7 @@ const PROJECT_ID_SUMMARY_HEADERS = [
   'RGB Basemap URL',
   'Production Category Group',
 ].concat(
+  PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
   PROJECT_ID_SUMMARY_DELTA_HEADERS,
   PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
 );
@@ -142,8 +151,18 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V5 =
   LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.concat(
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V6 =
+  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.concat(
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
+const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
+  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length;
+const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
+  PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX +
+  PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length;
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
-  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length +
+  PROJECT_ID_SUMMARY_DELTA_START_INDEX +
   PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
 
 /**
@@ -229,9 +248,17 @@ function previewProjectIdSummary() {
     mapDataSource: row[7] || '',
     rgbBasemapUrl: row[8] || '',
     productionCategoryGroup: row[9] || '',
+    latestAiEmailReceivedAt:
+      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX] || '',
+    proposedProductionKwh:
+      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1],
+    benchmarkProductionKwh:
+      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
+    tolerancePercent:
+      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
     shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
       (result, header, offset) => {
-        result[header] = row[10 + offset];
+        result[header] = row[PROJECT_ID_SUMMARY_DELTA_START_INDEX + offset];
         return result;
       },
       {},
@@ -361,6 +388,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
       hasProduction: false,
       firstReceivedAt: '',
       lastReceivedAt: '',
+      latestAnalysisReceivedAt: '',
+      latestProposedProductionKwh: '',
+      latestBenchmarkProductionKwh: '',
+      latestTolerancePercent: '',
     };
     const pdfCount = pdfCounts.get(project.key) || 0;
     let attachmentCount = 0;
@@ -395,6 +426,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
       mapData.mapDataSource || '',
       mapData.rgbBasemapUrl || '',
       getProjectIdSummaryCategoryGroup_(email),
+      email.latestAnalysisReceivedAt,
+      email.latestProposedProductionKwh,
+      email.latestBenchmarkProductionKwh,
+      email.latestTolerancePercent,
     ].concat(
       deltaValues,
       [
@@ -463,6 +498,27 @@ function buildProjectIdSummaryStats_(summary) {
         row[9] === PROJECT_ID_SUMMARY_CONFIG.OTHER_CATEGORIES_GROUP_LABEL,
     ).length,
     projectsWithoutCategoryGroup: summary.rows.filter((row) => !row[9]).length,
+    projectsWithLatestAiAnalysis: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX],
+    ).length,
+    projectsWithoutLatestAiAnalysis: summary.rows.filter(
+      (row) => !row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX],
+    ).length,
+    projectsWithProposedProduction: summary.rows.filter(
+      (row) => Number.isFinite(
+        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1],
+      ),
+    ).length,
+    projectsWithBenchmarkProduction: summary.rows.filter(
+      (row) => Number.isFinite(
+        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
+      ),
+    ).length,
+    projectsWithTolerancePercent: summary.rows.filter(
+      (row) => Number.isFinite(
+        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
+      ),
+    ).length,
     mapFoundInGoodLeap: summary.mapLookup.foundInGoodLeap,
     mapFoundInArtemisSales: summary.mapLookup.foundInArtemisSales,
     mapNotFound: summary.mapLookup.notFound,
@@ -954,6 +1010,21 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
     'Categories',
     sheet.getName(),
   );
+  const proposedProductionIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Proposed Production kWh',
+    sheet.getName(),
+  );
+  const benchmarkProductionIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Benchmark Production kWh',
+    sheet.getName(),
+  );
+  const tolerancePercentIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Tolerance %',
+    sheet.getName(),
+  );
 
   values.slice(1).forEach((row) => {
     const projectIds = splitProjectIdSummaryIds_(row[projectIdIndex]);
@@ -970,6 +1041,10 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
         hasProduction: false,
         firstReceivedAt: '',
         lastReceivedAt: '',
+        latestAnalysisReceivedAt: '',
+        latestProposedProductionKwh: '',
+        latestBenchmarkProductionKwh: '',
+        latestTolerancePercent: '',
       };
       metric.count += 1;
       if (isCategorized) {
@@ -988,6 +1063,18 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
           receivedAt.getTime() > metric.lastReceivedAt.getTime()
         ) {
           metric.lastReceivedAt = receivedAt;
+        }
+        if (
+          !metric.latestAnalysisReceivedAt ||
+          receivedAt.getTime() >= metric.latestAnalysisReceivedAt.getTime()
+        ) {
+          metric.latestAnalysisReceivedAt = receivedAt;
+          metric.latestProposedProductionKwh =
+            normalizeProjectIdSummaryNumber_(row[proposedProductionIndex]);
+          metric.latestBenchmarkProductionKwh =
+            normalizeProjectIdSummaryNumber_(row[benchmarkProductionIndex]);
+          metric.latestTolerancePercent =
+            normalizeProjectIdSummaryNumber_(row[tolerancePercentIndex]);
         }
       }
       metrics.set(key, metric);
@@ -1180,6 +1267,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V5,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V6,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -1241,7 +1332,22 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     );
     console.log(
       'Project ID Summary schema upgraded: absolute Azimuth and Pitch Delta ' +
-      'columns were inserted and existing project metadata was shifted safely.',
+      'columns and latest AI production values were inserted. Existing ' +
+      'project metadata was shifted safely.',
+    );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V6,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V6,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: latest AI email and production ' +
+      'columns were inserted and existing values were shifted safely.',
     );
   }
 
@@ -1253,7 +1359,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     .setFontWeight('bold')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle');
-  const deltaStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length + 1;
+  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
+  const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
     .getRange(
       1,
@@ -1283,6 +1390,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(8, 180);
   sheet.setColumnWidth(9, 520);
   sheet.setColumnWidth(10, 260);
+  sheet.setColumnWidth(latestAiStartColumn, 180);
+  sheet.setColumnWidths(latestAiStartColumn + 1, 2, 175);
+  sheet.setColumnWidth(latestAiStartColumn + 3, 135);
   sheet.setColumnWidths(
     deltaStartColumn,
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
@@ -1386,7 +1496,27 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   sheet.getRange(startRow, 8, rowCount, 2).setWrap(false);
   sheet.getRange(startRow, 10, rowCount, 1).setWrap(false);
 
-  const deltaStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length + 1;
+  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
+  sheet
+    .getRange(
+      startRow,
+      latestAiStartColumn,
+      rowCount,
+      PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length,
+    )
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
+    .setWrap(false);
+  sheet
+    .getRange(startRow, latestAiStartColumn, rowCount, 1)
+    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
+  sheet
+    .getRange(startRow, latestAiStartColumn + 1, rowCount, 2)
+    .setNumberFormat('0.###');
+  sheet
+    .getRange(startRow, latestAiStartColumn + 3, rowCount, 1)
+    .setNumberFormat('0.##');
+
+  const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
     .getRange(
       startRow,
@@ -1524,6 +1654,16 @@ function normalizeProjectIdSummaryDate_(value) {
   if (!value) return '';
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? '' : parsed;
+}
+
+function normalizeProjectIdSummaryNumber_(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : '';
+  }
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : '';
 }
 
 function projectIdSummaryDateTime_(value) {
