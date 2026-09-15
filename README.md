@@ -927,12 +927,14 @@ No new Script Property or trigger is required.
    email-row, and PDF-row totals match the source sheets.
 6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source`,
    `RGB Basemap URL`, `Production Category Group`, and the Shade Report Delta
-   columns plus `Engine Version`, `Created At`, `Updated At`, `Last Status
+   columns plus `Absolute Delta Azimuth`, `Absolute Delta Pitch`, `Absolute
+   Azimuth + Pitch`, `Engine Version`, `Created At`, `Updated At`, `Last Status
    Updated At`, and `Design Updated At` to legacy layouts and backfills
    historical projects. Confirm that RGB URLs are clickable, the group matches
    the `Categories` values in `AI Analysis`, Delta values match the
-   `Recalculated Weighted Average` rows in `Shade Reports Comparison`, and the
-   new project metadata matches PostHog.
+   `Recalculated Weighted Average` rows in `Shade Reports Comparison`, the
+   three absolute metrics are calculated, and the project metadata matches
+   PostHog.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
 8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
@@ -1303,9 +1305,10 @@ The deployment is ready only when all of the following are true:
   basemap URL when available. Its `Production Category Group` uses the same
   exact `Categories`-based Production rule as the weekly dashboard. Its Delta
   columns reproduce each project's `Recalculated Weighted Average` values from
-  `Shade Reports Comparison`. Columns AC:AG show the project engine version and
-  four project lifecycle timestamps from the GoodLeap or Artemis Sales project
-  record.
+  `Shade Reports Comparison`. The three highlighted absolute columns show the
+  absolute Azimuth Delta, absolute Pitch Delta, and their sum. Columns AF:AJ
+  show the project engine version and four project lifecycle timestamps from
+  the GoodLeap or Artemis Sales project record.
 - `Shade Reports Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are

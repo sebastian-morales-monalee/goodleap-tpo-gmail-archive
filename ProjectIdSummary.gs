@@ -20,6 +20,8 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   HEADER_FONT_COLOR: '#ffffff',
   DELTA_HEADER_BACKGROUND: '#b45f06',
   DELTA_DATA_BACKGROUND: '#fff2cc',
+  ABSOLUTE_DELTA_HEADER_BACKGROUND: '#7f6000',
+  ABSOLUTE_DELTA_DATA_BACKGROUND: '#f9cb9c',
   PROJECT_METADATA_HEADER_BACKGROUND: '#38761d',
   PROJECT_METADATA_DATA_BACKGROUND: '#e2f0d9',
   TAB_COLOR: '#7200c9',
@@ -37,7 +39,7 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   PROJECT_DESIGN_UPDATED_AT_FIELD: 'design_updated_at',
 };
 
-const PROJECT_ID_SUMMARY_DELTA_HEADERS = [
+const PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS = [
   'Delta Panel Count',
   'Delta Azimuth',
   'Delta Pitch',
@@ -57,6 +59,21 @@ const PROJECT_ID_SUMMARY_DELTA_HEADERS = [
   'Delta Nov (pp)',
   'Delta Dec (pp)',
 ];
+
+const PROJECT_ID_SUMMARY_ABSOLUTE_DELTA_HEADERS = [
+  'Absolute Delta Azimuth',
+  'Absolute Delta Pitch',
+  'Absolute Azimuth + Pitch',
+];
+
+const PROJECT_ID_SUMMARY_DELTA_HEADERS = [
+  'Delta Panel Count',
+  'Delta Azimuth',
+  PROJECT_ID_SUMMARY_ABSOLUTE_DELTA_HEADERS[0],
+  'Delta Pitch',
+  PROJECT_ID_SUMMARY_ABSOLUTE_DELTA_HEADERS[1],
+  PROJECT_ID_SUMMARY_ABSOLUTE_DELTA_HEADERS[2],
+].concat(PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS.slice(3));
 
 const PROJECT_ID_SUMMARY_POSTHOG_HEADERS = [
   'Engine Version',
@@ -119,10 +136,15 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3 = [
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4 =
   LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.concat(
-    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS,
+  );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V5 =
+  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.concat(
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
-  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.length;
+  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length +
+  PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
 
 /**
  * Creates or upgrades Project ID Summary and immediately populates it.
@@ -1073,8 +1095,9 @@ function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
     'Match Type',
     sheet.getName(),
   );
-  const deltaIndexes = PROJECT_ID_SUMMARY_DELTA_HEADERS.map((header) =>
-    requireProjectIdSummaryHeader_(headers, header, sheet.getName()),
+  const deltaIndexes = PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS.map(
+    (header) =>
+      requireProjectIdSummaryHeader_(headers, header, sheet.getName()),
   );
 
   values.slice(1).forEach((row) => {
@@ -1082,14 +1105,38 @@ function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
     if (matchType !== PROJECT_ID_SUMMARY_CONFIG.COMPARISON_MATCH_TYPE) return;
     const projectId = String(row[projectIdIndex] || '').trim().toLowerCase();
     if (!isProjectIdSummaryUuid_(projectId)) return;
+    const comparisonValues = deltaIndexes.map((index) =>
+      Number.isFinite(row[index]) ? row[index] : '',
+    );
     byProjectId.set(
       projectId,
-      deltaIndexes.map((index) =>
-        Number.isFinite(row[index]) ? row[index] : '',
-      ),
+      buildProjectIdSummaryDeltaValues_(comparisonValues),
     );
   });
   return byProjectId;
+}
+
+function buildProjectIdSummaryDeltaValues_(comparisonValues) {
+  const deltaAzimuth = comparisonValues[1];
+  const deltaPitch = comparisonValues[2];
+  const hasDeltaAzimuth = Number.isFinite(deltaAzimuth);
+  const hasDeltaPitch = Number.isFinite(deltaPitch);
+  const absoluteDeltaAzimuth = hasDeltaAzimuth
+    ? Math.abs(deltaAzimuth)
+    : '';
+  const absoluteDeltaPitch = hasDeltaPitch ? Math.abs(deltaPitch) : '';
+  const absoluteAzimuthAndPitch = hasDeltaAzimuth && hasDeltaPitch
+    ? absoluteDeltaAzimuth + absoluteDeltaPitch
+    : '';
+
+  return [
+    comparisonValues[0],
+    deltaAzimuth,
+    absoluteDeltaAzimuth,
+    deltaPitch,
+    absoluteDeltaPitch,
+    absoluteAzimuthAndPitch,
+  ].concat(comparisonValues.slice(3));
 }
 
 function getOrCreateProjectIdSummarySheet_(spreadsheet) {
@@ -1129,6 +1176,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V5,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -1178,6 +1229,20 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'Project ID Summary schema upgraded: Engine Version and project date ' +
       'columns were appended.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V5,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V5,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: absolute Azimuth and Pitch Delta ' +
+      'columns were inserted and existing project metadata was shifted safely.',
+    );
   }
 
   sheet
@@ -1197,7 +1262,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_HEADER_BACKGROUND);
-  const metadataStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.length + 1;
+  styleProjectIdSummaryAbsoluteDeltaColumns_(sheet, 1, 1, true);
+  const metadataStartColumn = PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1;
   sheet
     .getRange(
       1,
@@ -1222,9 +1288,140 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
     135,
   );
+  PROJECT_ID_SUMMARY_ABSOLUTE_DELTA_HEADERS.forEach((header) => {
+    const column = PROJECT_ID_SUMMARY_HEADERS.indexOf(header) + 1;
+    sheet.setColumnWidth(
+      column,
+      header === 'Absolute Azimuth + Pitch' ? 190 : 165,
+    );
+  });
   sheet.setColumnWidth(metadataStartColumn, 135);
   sheet.setColumnWidths(metadataStartColumn + 1, 4, 180);
+  const existingDataRows = Math.max(0, sheet.getLastRow() - 1);
+  if (existingDataRows > 0) {
+    formatProjectIdSummaryRows_(sheet, 2, existingDataRows);
+  }
   return sheet;
+}
+
+function migrateProjectIdSummarySchema_(sheet, sourceHeaders) {
+  const dataRowCount = Math.max(0, sheet.getLastRow() - 1);
+  if (dataRowCount === 0) return;
+
+  const sourceRows = sheet
+    .getRange(2, 1, dataRowCount, sourceHeaders.length)
+    .getValues();
+  const sourceIndexByHeader = new Map();
+  sourceHeaders.forEach((header, index) => {
+    sourceIndexByHeader.set(header, index);
+  });
+  const migratedRows = sourceRows.map((sourceRow) => {
+    const migratedRow = PROJECT_ID_SUMMARY_HEADERS.map((header) => {
+      const sourceIndex = sourceIndexByHeader.get(header);
+      return sourceIndex === undefined ? '' : sourceRow[sourceIndex];
+    });
+    const deltaAzimuth = migratedRow[
+      PROJECT_ID_SUMMARY_HEADERS.indexOf('Delta Azimuth')
+    ];
+    const deltaPitch = migratedRow[
+      PROJECT_ID_SUMMARY_HEADERS.indexOf('Delta Pitch')
+    ];
+    const hasDeltaAzimuth = Number.isFinite(deltaAzimuth);
+    const hasDeltaPitch = Number.isFinite(deltaPitch);
+    const absoluteDeltaAzimuth = hasDeltaAzimuth
+      ? Math.abs(deltaAzimuth)
+      : '';
+    const absoluteDeltaPitch = hasDeltaPitch ? Math.abs(deltaPitch) : '';
+    migratedRow[
+      PROJECT_ID_SUMMARY_HEADERS.indexOf('Absolute Delta Azimuth')
+    ] = absoluteDeltaAzimuth;
+    migratedRow[
+      PROJECT_ID_SUMMARY_HEADERS.indexOf('Absolute Delta Pitch')
+    ] = absoluteDeltaPitch;
+    migratedRow[
+      PROJECT_ID_SUMMARY_HEADERS.indexOf('Absolute Azimuth + Pitch')
+    ] = hasDeltaAzimuth && hasDeltaPitch
+      ? absoluteDeltaAzimuth + absoluteDeltaPitch
+      : '';
+    return migratedRow;
+  });
+
+  sheet
+    .getRange(
+      2,
+      1,
+      dataRowCount,
+      Math.max(sourceHeaders.length, PROJECT_ID_SUMMARY_HEADERS.length),
+    )
+    .clearContent();
+  sheet
+    .getRange(2, 1, dataRowCount, PROJECT_ID_SUMMARY_HEADERS.length)
+    .setValues(migratedRows);
+  setProjectIdSummaryRichLinks_(sheet, migratedRows);
+}
+
+function styleProjectIdSummaryAbsoluteDeltaColumns_(
+  sheet,
+  startRow,
+  rowCount,
+  isHeader,
+) {
+  const background = isHeader
+    ? PROJECT_ID_SUMMARY_CONFIG.ABSOLUTE_DELTA_HEADER_BACKGROUND
+    : PROJECT_ID_SUMMARY_CONFIG.ABSOLUTE_DELTA_DATA_BACKGROUND;
+  PROJECT_ID_SUMMARY_ABSOLUTE_DELTA_HEADERS.forEach((header) => {
+    const column = PROJECT_ID_SUMMARY_HEADERS.indexOf(header) + 1;
+    sheet.getRange(startRow, column, rowCount, 1).setBackground(background);
+  });
+}
+
+function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
+  if (rowCount < 1) return;
+
+  sheet.getRange(startRow, 3, rowCount, 3).setNumberFormat('#,##0');
+  sheet
+    .getRange(startRow, 6, rowCount, 2)
+    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
+  sheet.getRange(startRow, 1, rowCount, 2).setWrap(false);
+  sheet.getRange(startRow, 8, rowCount, 2).setWrap(false);
+  sheet.getRange(startRow, 10, rowCount, 1).setWrap(false);
+
+  const deltaStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length + 1;
+  sheet
+    .getRange(
+      startRow,
+      deltaStartColumn,
+      rowCount,
+      PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
+    )
+    .setNumberFormat('0.####')
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_DATA_BACKGROUND)
+    .setWrap(false);
+  styleProjectIdSummaryAbsoluteDeltaColumns_(
+    sheet,
+    startRow,
+    rowCount,
+    false,
+  );
+
+  const metadataStartColumn = PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1;
+  sheet
+    .getRange(
+      startRow,
+      metadataStartColumn,
+      rowCount,
+      PROJECT_ID_SUMMARY_POSTHOG_HEADERS.length,
+    )
+    .setBackground(
+      PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND,
+    )
+    .setWrap(false);
+  sheet
+    .getRange(startRow, metadataStartColumn, rowCount, 1)
+    .setNumberFormat('@');
+  sheet
+    .getRange(startRow, metadataStartColumn + 1, rowCount, 4)
+    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
 }
 
 function projectIdSummaryHeadersMatch_(currentHeaders, expectedHeaders) {
@@ -1271,43 +1468,12 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
     PROJECT_ID_SUMMARY_HEADERS.length,
   );
   range.setValues(rows).setVerticalAlignment('middle');
-  sheet.getRange(2, 3, rows.length, 3).setNumberFormat('#,##0');
-  sheet
-    .getRange(2, 6, rows.length, 2)
-    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
-  sheet.getRange(2, 1, rows.length, 2).setWrap(false);
-  sheet.getRange(2, 8, rows.length, 2).setWrap(false);
-  sheet.getRange(2, 10, rows.length, 1).setWrap(false);
-  const deltaStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.length + 1;
-  sheet
-    .getRange(
-      2,
-      deltaStartColumn,
-      rows.length,
-      PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
-    )
-    .setNumberFormat('0.####')
-    .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_DATA_BACKGROUND)
-    .setWrap(false);
-  const metadataStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.length + 1;
-  sheet
-    .getRange(
-      2,
-      metadataStartColumn,
-      rows.length,
-      PROJECT_ID_SUMMARY_POSTHOG_HEADERS.length,
-    )
-    .setBackground(
-      PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND,
-    )
-    .setWrap(false);
-  sheet
-    .getRange(2, metadataStartColumn, rows.length, 1)
-    .setNumberFormat('@');
-  sheet
-    .getRange(2, metadataStartColumn + 1, rows.length, 4)
-    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
+  formatProjectIdSummaryRows_(sheet, 2, rows.length);
 
+  setProjectIdSummaryRichLinks_(sheet, rows);
+}
+
+function setProjectIdSummaryRichLinks_(sheet, rows) {
   const richUrls = rows.map((row) => {
     const url = String(row[1] || '').trim();
     const builder = SpreadsheetApp.newRichTextValue().setText(url);
