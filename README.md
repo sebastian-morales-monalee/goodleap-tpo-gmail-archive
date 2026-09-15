@@ -47,7 +47,7 @@ Integrated trigger (every 5 minutes)
                                              |-> PostHogSolarTables.gs
                                              |       `-> Project CSVs
                                              |               `-> TOFValuesComparison.gs
-                                             |                       `-> TOF Values Comparison
+                                             |                       `-> Shade Reports Comparison
                                              `-> ProjectIdSummary.gs
                                              ^
                                              |
@@ -943,7 +943,7 @@ No Sheet columns or triggers need to be created manually.
 10. Do not add or replace triggers. The existing five-minute coordinator and
    hourly PostHog reconciliation automatically invoke the new workflow.
 
-### Adding TOF Values Comparison to an existing installation
+### Adding Shade Reports Comparison to an existing installation
 
 No new Script Property or trigger is required.
 
@@ -956,10 +956,15 @@ No new Script Property or trigger is required.
    `previewTOFValuesComparison()`. Confirm the Project ID, matched arrays, and
    unmatched-array counts for the previewed projects. The preview writes
    neither the Sheet nor Drive files.
-5. Run `setupTOFValuesComparison()` once. It safely migrates an existing
-   version 1 header row from PDF/Project terminology to Aurora/Artemis without
-   shifting its data. Confirm that the tab has Aurora, Artemis, and Delta
-   columns for the Summary metrics and all twelve months.
+5. Run `setupTOFValuesComparison()` once. The managed tab is now named
+   `Shade Reports Comparison`. If only the legacy `TOF Values Comparison` tab
+   exists, setup renames it in place so its data and Sheet ID are preserved.
+   If both tabs exist, setup uses `Shade Reports Comparison` and leaves the
+   legacy duplicate untouched for manual review. It also safely migrates an
+   existing version 1 header row from PDF/Project terminology to
+   Aurora/Artemis without shifting its data. Confirm that the managed tab has
+   Aurora, Artemis, and Delta columns for the Summary metrics and all twelve
+   months.
 6. Run `refreshTOFValuesComparisonFormatting()` once to style every historical
    project block without rereading the source CSVs. Future comparison writes
    reapply the same style automatically.
@@ -974,7 +979,10 @@ No new Script Property or trigger is required.
 9. Run `refreshChangedTOFValuesComparisons()` when an existing CSV is manually
    corrected and an immediate content-fingerprint check is needed. Automatic
    runs check existing projects in small rotating batches.
-10. Do not reinstall or edit triggers. The existing PostHog reconciliation
+10. After `pendingProjects` reaches zero and the managed tab is verified,
+    manually remove the legacy `TOF Values Comparison` duplicate if it still
+    exists. The script never deletes or merges that duplicate automatically.
+11. Do not reinstall or edit triggers. The existing PostHog reconciliation
    reaches the new workflow after rebuilding the project-side CSVs.
 
 ### Adding Project ID to existing AI Analysis and PDF Analysis sheets
@@ -1216,7 +1224,7 @@ The deployment is ready only when all of the following are true:
   from `PostHog Projects`, reconciles its email and PDF counts with the two
   analysis sheets, and shows the PostHog map source plus a clickable RGB
   basemap URL when available.
-- `TOF Values Comparison` contains no duplicate Project ID blocks and its
+- `Shade Reports Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are
   marked `Review Required`. Every contiguous Project ID block shares a visual

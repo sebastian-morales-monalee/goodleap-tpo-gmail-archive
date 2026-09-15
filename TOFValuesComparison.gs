@@ -4,7 +4,7 @@
  * This file belongs in the SAME Apps Script project as the other workflow
  * files. It reads the four structured CSV links already stored in
  * "PDF Analysis" and maintains one deterministic comparison per Project ID
- * in "TOF Values Comparison". OpenAI is not called by this workflow.
+ * in "Shade Reports Comparison". OpenAI is not called by this workflow.
  *
  * Safe first-run sequence:
  *   1) previewTOFValuesComparison()
@@ -17,7 +17,8 @@
  */
 
 const TOF_COMPARISON_CONFIG = {
-  SHEET_NAME: 'TOF Values Comparison',
+  SHEET_NAME: 'Shade Reports Comparison',
+  LEGACY_SHEET_NAME: 'TOF Values Comparison',
   SOURCE_SHEET_NAME: 'PDF Analysis',
   PROJECTS_SHEET_NAME: 'PostHog Projects',
   HEADER_BACKGROUND: '#7200c9',
@@ -102,7 +103,7 @@ const TOF_COMPARISON_LEGACY_HEADER_BY_CURRENT = {
 function setupTOFValuesComparison() {
   const resources = getOrCreateResources_();
   const sheet = getOrCreateTOFValuesComparisonSheet_(resources.spreadsheet);
-  console.log('TOF Values Comparison setup completed.');
+  console.log(`${TOF_COMPARISON_CONFIG.SHEET_NAME} setup completed.`);
   console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
   console.log(`Derived sheet: ${sheet.getName()}`);
   return {sheet: sheet.getName(), headers: getTOFValuesComparisonHeaders_().length};
@@ -166,7 +167,9 @@ function previewTOFValuesComparison() {
   });
   const result = {candidates: candidates.length, preview};
   console.log(JSON.stringify(result, null, 2));
-  console.log('Preview completed without writing TOF Values Comparison.');
+  console.log(
+    `Preview completed without writing ${TOF_COMPARISON_CONFIG.SHEET_NAME}.`,
+  );
   return result;
 }
 
@@ -227,7 +230,9 @@ function syncTOFValuesComparisonsSafely_(spreadsheet) {
     });
   } catch (error) {
     const message = truncateTOFComparisonText_(String(error), 1000);
-    console.error(`TOF Values Comparison sync failed safely: ${message}`);
+    console.error(
+      `${TOF_COMPARISON_CONFIG.SHEET_NAME} sync failed safely: ${message}`,
+    );
     return {updated: false, error: message};
   }
 }
@@ -305,7 +310,8 @@ function syncTOFValuesComparisonsForSpreadsheet_(spreadsheet, options) {
     updates.forEach((projectRows) => rows.push.apply(rows, projectRows));
     if (rows.length > TOF_COMPARISON_CONFIG.MAX_OUTPUT_ROWS) {
       throw new Error(
-        `TOF Values Comparison would contain ${rows.length} rows, exceeding ` +
+        `${TOF_COMPARISON_CONFIG.SHEET_NAME} would contain ${rows.length} ` +
+        'rows, exceeding ' +
         `the safety limit of ${TOF_COMPARISON_CONFIG.MAX_OUTPUT_ROWS}.`,
       );
     }
@@ -1343,8 +1349,7 @@ function getTOFValuesComparisonHeaders_() {
 function getOrCreateTOFValuesComparisonSheet_(spreadsheet) {
   const headers = getTOFValuesComparisonHeaders_();
   const legacyHeaders = getLegacyTOFValuesComparisonHeaders_();
-  let sheet = spreadsheet.getSheetByName(TOF_COMPARISON_CONFIG.SHEET_NAME);
-  if (!sheet) sheet = spreadsheet.insertSheet(TOF_COMPARISON_CONFIG.SHEET_NAME);
+  const sheet = resolveTOFValuesComparisonSheet_(spreadsheet);
   if (sheet.getMaxColumns() < headers.length) {
     sheet.insertColumnsAfter(
       sheet.getMaxColumns(),
@@ -1361,12 +1366,13 @@ function getOrCreateTOFValuesComparisonSheet_(spreadsheet) {
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
       formatTOFValuesComparisonSheet_(sheet, Math.max(sheet.getLastRow(), 1));
       console.log(
-        'TOF Values Comparison headers migrated from PDF/Project to Aurora/Artemis.',
+        `${TOF_COMPARISON_CONFIG.SHEET_NAME} headers migrated from ` +
+        'PDF/Project to Aurora/Artemis.',
       );
     } else {
       throw new Error(
-        'TOF Values Comparison has an unexpected schema. Preserve the sheet and ' +
-        'review its header row before rerunning setup.',
+        `${TOF_COMPARISON_CONFIG.SHEET_NAME} has an unexpected schema. ` +
+        'Preserve the sheet and review its header row before rerunning setup.',
       );
     }
   }
@@ -1375,6 +1381,45 @@ function getOrCreateTOFValuesComparisonSheet_(spreadsheet) {
     formatTOFValuesComparisonSheet_(sheet, 1);
   }
   return sheet;
+}
+
+/**
+ * Resolves the canonical comparison sheet without discarding user data.
+ *
+ * Migration rules:
+ * - Prefer the canonical sheet when it already exists.
+ * - Rename the legacy sheet in place when it is the only matching sheet.
+ * - Create the canonical sheet only when neither name exists.
+ * - When both names exist, leave the legacy duplicate untouched for manual
+ *   review and continue exclusively with the canonical sheet.
+ */
+function resolveTOFValuesComparisonSheet_(spreadsheet) {
+  const canonicalName = TOF_COMPARISON_CONFIG.SHEET_NAME;
+  const legacyName = TOF_COMPARISON_CONFIG.LEGACY_SHEET_NAME;
+  const canonicalSheet = spreadsheet.getSheetByName(canonicalName);
+  const legacySheet = spreadsheet.getSheetByName(legacyName);
+
+  if (canonicalSheet) {
+    if (legacySheet) {
+      console.warn(
+        `Both "${canonicalName}" and legacy "${legacyName}" exist. ` +
+        `Using "${canonicalName}" and leaving the legacy sheet unchanged ` +
+        'for manual review.',
+      );
+    }
+    return canonicalSheet;
+  }
+
+  if (legacySheet) {
+    legacySheet.setName(canonicalName);
+    console.log(
+      `Renamed legacy sheet "${legacyName}" to "${canonicalName}" in place.`,
+    );
+    return legacySheet;
+  }
+
+  console.log(`Creating managed sheet "${canonicalName}".`);
+  return spreadsheet.insertSheet(canonicalName);
 }
 
 function getLegacyTOFValuesComparisonHeaders_() {
