@@ -248,6 +248,12 @@ It:
 - Copies Delta Panel Count, aggregate Azimuth and Pitch deltas, annual TOF,
   Solar Access, TSRF, and Jan-Dec deltas from each project's `Recalculated
   Weighted Average` row in `Shade Reports Comparison`.
+- Reads `production_engine_version`, `created_at`, `updated_at`,
+  `last_status_updated_at`, and `design_updated_at` from the GoodLeap projects
+  table, with Artemis Sales as fallback. The corresponding `Engine Version`,
+  `Created At`, `Updated At`, `Last Status Updated At`, and `Design Updated At`
+  columns occupy AC:AG and retain prior successful values after temporary
+  PostHog query failures.
 - Sorts projects by Email Count and then by the most recent email.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
   workflows without adding another trigger. PostHog map lookups run only from
@@ -255,10 +261,11 @@ It:
 
 Primary functions:
 
-1. `previewProjectIdSummaryMapData()`
-2. `previewProjectIdSummary()`
-3. `setupProjectIdSummary()`
-4. `refreshProjectIdSummary()`
+1. `previewProjectIdSummaryPostHogData()`
+2. `previewProjectIdSummaryMapData()` (backward-compatible alias)
+3. `previewProjectIdSummary()`
+4. `setupProjectIdSummary()`
+5. `refreshProjectIdSummary()`
 
 ### `OpenAIPdfExtraction.gs`
 
@@ -911,17 +918,21 @@ No new Script Property or trigger is required.
 2. Keep the existing `OpenAIAnalysis.gs` and `OpenAIPdfExtraction.gs`; their
    safe summary refresh calls remain compatible with the new columns.
 3. Save the Apps Script project.
-4. Open `ProjectIdSummary.gs` and run `previewProjectIdSummaryMapData()`.
+4. Open `ProjectIdSummary.gs` and run
+   `previewProjectIdSummaryPostHogData()`.
    Confirm that known GoodLeap and Sales projects show the expected lookup
-   source, map data source, and RGB URL. The preview does not write the sheet.
+   source, map data source, RGB URL, engine version, and project dates. The
+   preview does not write the sheet.
 5. Run `previewProjectIdSummary()`. Confirm that the logged unique-project,
    email-row, and PDF-row totals match the source sheets.
 6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source`,
    `RGB Basemap URL`, `Production Category Group`, and the Shade Report Delta
-   columns to legacy layouts and backfills historical projects. Confirm that
-   RGB URLs are clickable, the group matches the `Categories` values in
-   `AI Analysis`, and Delta values match the `Recalculated Weighted Average`
-   rows in `Shade Reports Comparison`.
+   columns plus `Engine Version`, `Created At`, `Updated At`, `Last Status
+   Updated At`, and `Design Updated At` to legacy layouts and backfills
+   historical projects. Confirm that RGB URLs are clickable, the group matches
+   the `Categories` values in `AI Analysis`, Delta values match the
+   `Recalculated Weighted Average` rows in `Shade Reports Comparison`, and the
+   new project metadata matches PostHog.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
 8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
@@ -1292,7 +1303,9 @@ The deployment is ready only when all of the following are true:
   basemap URL when available. Its `Production Category Group` uses the same
   exact `Categories`-based Production rule as the weekly dashboard. Its Delta
   columns reproduce each project's `Recalculated Weighted Average` values from
-  `Shade Reports Comparison`.
+  `Shade Reports Comparison`. Columns AC:AG show the project engine version and
+  four project lifecycle timestamps from the GoodLeap or Artemis Sales project
+  record.
 - `Shade Reports Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are

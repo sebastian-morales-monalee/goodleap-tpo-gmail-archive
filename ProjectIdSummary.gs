@@ -20,6 +20,8 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   HEADER_FONT_COLOR: '#ffffff',
   DELTA_HEADER_BACKGROUND: '#b45f06',
   DELTA_DATA_BACKGROUND: '#fff2cc',
+  PROJECT_METADATA_HEADER_BACKGROUND: '#38761d',
+  PROJECT_METADATA_DATA_BACKGROUND: '#e2f0d9',
   TAB_COLOR: '#7200c9',
   DATE_FORMAT: 'yyyy-mm-dd hh:mm:ss',
   MAP_QUERY_BATCH_SIZE: 100,
@@ -28,6 +30,11 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   PRODUCTION_CATEGORY: 'Production',
   PRODUCTION_GROUP_LABEL: 'Production with other categories',
   OTHER_CATEGORIES_GROUP_LABEL: 'Other Categories without Production',
+  PROJECT_ENGINE_VERSION_FIELD: 'production_engine_version',
+  PROJECT_CREATED_AT_FIELD: 'created_at',
+  PROJECT_UPDATED_AT_FIELD: 'updated_at',
+  PROJECT_LAST_STATUS_UPDATED_AT_FIELD: 'last_status_updated_at',
+  PROJECT_DESIGN_UPDATED_AT_FIELD: 'design_updated_at',
 };
 
 const PROJECT_ID_SUMMARY_DELTA_HEADERS = [
@@ -51,6 +58,14 @@ const PROJECT_ID_SUMMARY_DELTA_HEADERS = [
   'Delta Dec (pp)',
 ];
 
+const PROJECT_ID_SUMMARY_POSTHOG_HEADERS = [
+  'Engine Version',
+  'Created At',
+  'Updated At',
+  'Last Status Updated At',
+  'Design Updated At',
+];
+
 const PROJECT_ID_SUMMARY_HEADERS = [
   'Project ID',
   'Project URL',
@@ -62,7 +77,10 @@ const PROJECT_ID_SUMMARY_HEADERS = [
   'Map Data Source',
   'RGB Basemap URL',
   'Production Category Group',
-].concat(PROJECT_ID_SUMMARY_DELTA_HEADERS);
+].concat(
+  PROJECT_ID_SUMMARY_DELTA_HEADERS,
+  PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+);
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1 = [
   'Project ID',
@@ -99,6 +117,13 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3 = [
   'Production Category Group',
 ];
 
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4 =
+  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.concat(
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+  );
+const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
+  LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.length;
+
 /**
  * Creates or upgrades Project ID Summary and immediately populates it.
  * It is safe to run repeatedly and never creates duplicate project rows.
@@ -110,31 +135,51 @@ function setupProjectIdSummary() {
 }
 
 /**
- * Reads a small sample of Project IDs from both map-source tables without
- * writing the destination sheet.
+ * Backward-compatible alias for the complete PostHog metadata preview.
  */
 function previewProjectIdSummaryMapData() {
+  return previewProjectIdSummaryPostHogData();
+}
+
+/**
+ * Reads a small sample of Project IDs from both PostHog project and map
+ * sources without writing the destination sheet.
+ */
+function previewProjectIdSummaryPostHogData() {
   const resources = getOrCreateResources_();
   const projects = loadProjectIdSummaryBaseProjects_(resources.spreadsheet)
     .slice(0, PROJECT_ID_SUMMARY_CONFIG.MAP_PREVIEW_LIMIT);
+  const projectIds = projects.map((project) => project.projectId);
   const lookup = fetchProjectIdSummaryMapData_(
-    projects.map((project) => project.projectId),
+    projectIds,
   );
+  const metadataLookup = fetchProjectIdSummaryProjectMetadata_(projectIds);
   const preview = projects.map((project) => {
     const mapData = lookup.byProjectId.get(project.key) || {};
+    const metadata = metadataLookup.byProjectId.get(project.key) || {};
     return {
       projectId: project.projectId,
-      lookupSource: mapData.lookupSource || '',
+      mapLookupSource: mapData.lookupSource || '',
       mapDataSource: mapData.mapDataSource || '',
       rgbBasemapUrl: mapData.rgbBasemapUrl || '',
+      projectLookupSource: metadata.lookupSource || '',
+      engineVersion: metadata.engineVersion || '',
+      createdAt: metadata.createdAt || '',
+      updatedAt: metadata.updatedAt || '',
+      lastStatusUpdatedAt: metadata.lastStatusUpdatedAt || '',
+      designUpdatedAt: metadata.designUpdatedAt || '',
     };
   });
   const result = {
     projectsPreviewed: projects.length,
-    foundInGoodLeap: lookup.foundInGoodLeap,
-    foundInArtemisSales: lookup.foundInArtemisSales,
-    notFound: lookup.notFound,
-    errors: lookup.errors.length,
+    mapFoundInGoodLeap: lookup.foundInGoodLeap,
+    mapFoundInArtemisSales: lookup.foundInArtemisSales,
+    mapNotFound: lookup.notFound,
+    mapErrors: lookup.errors.length,
+    projectMetadataFoundInGoodLeap: metadataLookup.foundInGoodLeap,
+    projectMetadataFoundInArtemisSales: metadataLookup.foundInArtemisSales,
+    projectMetadataNotFound: metadataLookup.notFound,
+    projectMetadataErrors: metadataLookup.errors.length,
     preview,
   };
   console.log(JSON.stringify(result, null, 2));
@@ -169,6 +214,12 @@ function previewProjectIdSummary() {
       },
       {},
     ),
+    engineVersion: row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX] || '',
+    createdAt: row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1] || '',
+    updatedAt: row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 2] || '',
+    lastStatusUpdatedAt:
+      row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 3] || '',
+    designUpdatedAt: row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 4] || '',
   }));
   console.log(JSON.stringify(result, null, 2));
   console.log('Preview completed without writing Project ID Summary.');
@@ -219,9 +270,12 @@ function refreshProjectIdSummarySafely_(spreadsheet, options) {
 function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
   const sheet = getOrCreateProjectIdSummarySheet_(spreadsheet);
   const existingMapData = loadExistingProjectIdSummaryMapData_(sheet);
+  const existingProjectMetadata =
+    loadExistingProjectIdSummaryProjectMetadata_(sheet);
   const summary = buildProjectIdSummary_(spreadsheet, {
     refreshMapData: Boolean(options && options.refreshMapData),
     existingMapData,
+    existingProjectMetadata,
   });
   const existingRows = loadExistingProjectIdSummaryRows_(sheet);
   const unchanged = projectIdSummaryRowsEqual_(existingRows, summary.rows);
@@ -253,6 +307,9 @@ function buildProjectIdSummary_(spreadsheet, options) {
   const existingMapData = options && options.existingMapData
     ? options.existingMapData
     : new Map();
+  const existingProjectMetadata = options && options.existingProjectMetadata
+    ? options.existingProjectMetadata
+    : new Map();
   const pendingMapProjectIds = projects
     .filter((project) => {
       const existing = existingMapData.get(project.key);
@@ -264,6 +321,11 @@ function buildProjectIdSummary_(spreadsheet, options) {
       pendingMapProjectIds,
     )
     : emptyProjectIdSummaryMapLookup_();
+  const projectMetadataLookup = options && options.refreshMapData
+    ? fetchProjectIdSummaryProjectMetadata_(
+      projects.map((project) => project.projectId),
+    )
+    : emptyProjectIdSummaryProjectMetadataLookup_();
   const rows = [];
   let projectsWithoutEmails = 0;
   let projectsWithoutPdfs = 0;
@@ -295,6 +357,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
     if (!comparisonDeltas.has(project.key)) {
       projectsWithoutComparisonDeltas += 1;
     }
+    const refreshedProjectMetadata =
+      projectMetadataLookup.byProjectId.get(project.key);
+    const projectMetadata = refreshedProjectMetadata ||
+      existingProjectMetadata.get(project.key) || {};
 
     rows.push([
       project.projectId,
@@ -307,7 +373,16 @@ function buildProjectIdSummary_(spreadsheet, options) {
       mapData.mapDataSource || '',
       mapData.rgbBasemapUrl || '',
       getProjectIdSummaryCategoryGroup_(email),
-    ].concat(deltaValues));
+    ].concat(
+      deltaValues,
+      [
+        projectMetadata.engineVersion || '',
+        projectMetadata.createdAt || '',
+        projectMetadata.updatedAt || '',
+        projectMetadata.lastStatusUpdatedAt || '',
+        projectMetadata.designUpdatedAt || '',
+      ],
+    ));
   });
 
   rows.sort((left, right) => {
@@ -339,6 +414,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       0,
     ),
     mapLookup,
+    projectMetadataLookup,
   };
 }
 
@@ -369,6 +445,29 @@ function buildProjectIdSummaryStats_(summary) {
     mapFoundInArtemisSales: summary.mapLookup.foundInArtemisSales,
     mapNotFound: summary.mapLookup.notFound,
     mapQueryErrors: summary.mapLookup.errors.length,
+    projectMetadataFoundInGoodLeap:
+      summary.projectMetadataLookup.foundInGoodLeap,
+    projectMetadataFoundInArtemisSales:
+      summary.projectMetadataLookup.foundInArtemisSales,
+    projectMetadataNotFound: summary.projectMetadataLookup.notFound,
+    projectMetadataQueryErrors: summary.projectMetadataLookup.errors.length,
+    projectsWithEngineVersion: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX],
+    ).length,
+    projectsWithCreatedAt: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1],
+    ).length,
+    projectsWithUpdatedAt: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 2],
+    ).length,
+    projectsWithLastStatusUpdatedAt:
+      summary.rows.filter(
+        (row) => row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 3],
+      ).length,
+    projectsWithDesignUpdatedAt:
+      summary.rows.filter(
+        (row) => row[PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 4],
+      ).length,
   };
 }
 
@@ -499,6 +598,191 @@ function parseProjectIdSummaryMapData_(response, lookupSource) {
   return byProjectId;
 }
 
+function emptyProjectIdSummaryProjectMetadataLookup_() {
+  return {
+    byProjectId: new Map(),
+    foundInGoodLeap: 0,
+    foundInArtemisSales: 0,
+    notFound: 0,
+    errors: [],
+  };
+}
+
+/**
+ * Fetches the current project metadata in batches. GoodLeap is authoritative;
+ * Artemis Sales is queried only for Project IDs not found in GoodLeap.
+ */
+function fetchProjectIdSummaryProjectMetadata_(projectIds) {
+  const uniqueProjectIds = Array.from(new Set(
+    projectIds
+      .map((projectId) => String(projectId || '').trim().toLowerCase())
+      .filter((projectId) => isProjectIdSummaryUuid_(projectId)),
+  ));
+  if (
+    uniqueProjectIds.length >
+    PROJECT_ID_SUMMARY_CONFIG.MAX_PROJECT_IDS_PER_SYNC
+  ) {
+    throw new Error(
+      `Project ID Summary found ${uniqueProjectIds.length} Project IDs, ` +
+      `exceeding the safety limit of ` +
+      `${PROJECT_ID_SUMMARY_CONFIG.MAX_PROJECT_IDS_PER_SYNC}.`,
+    );
+  }
+  if (uniqueProjectIds.length === 0) {
+    return emptyProjectIdSummaryProjectMetadataLookup_();
+  }
+  if (typeof getPostHogSolarSettings_ !== 'function') {
+    throw new Error(
+      'Project ID Summary requires the repository version of ' +
+      'PostHogSolarTables.gs to query project metadata.',
+    );
+  }
+
+  const settings = getPostHogSolarSettings_();
+  const sources = [
+    {
+      label: 'GoodLeap',
+      queryLabel: 'goodleap',
+      table: settings.goodLeapProjectsTable,
+    },
+    {
+      label: 'Artemis Sales',
+      queryLabel: 'artemis_sales',
+      table: settings.artemisSalesProjectsTable,
+    },
+  ];
+  const result = emptyProjectIdSummaryProjectMetadataLookup_();
+  const failedProjectIds = new Set();
+  let unresolved = uniqueProjectIds.slice();
+
+  sources.forEach((source) => {
+    if (unresolved.length === 0) return;
+    const sourceIds = unresolved.slice();
+    chunkPostHogArray_(
+      sourceIds,
+      PROJECT_ID_SUMMARY_CONFIG.MAP_QUERY_BATCH_SIZE,
+    ).forEach((batch) => {
+      try {
+        const found = fetchProjectIdSummaryProjectMetadataFromTable_(
+          batch,
+          source,
+          settings,
+        );
+        found.forEach((metadata, projectId) => {
+          if (result.byProjectId.has(projectId)) return;
+          result.byProjectId.set(projectId, metadata);
+          if (source.label === 'GoodLeap') {
+            result.foundInGoodLeap += 1;
+          } else {
+            result.foundInArtemisSales += 1;
+          }
+        });
+      } catch (error) {
+        const safeError = truncatePostHogText_(String(error), 1000);
+        batch.forEach((projectId) => failedProjectIds.add(projectId));
+        result.errors.push({
+          lookupSource: source.label,
+          projectIds: batch.slice(),
+          error: safeError,
+        });
+        console.error(`[PROJECT METADATA ERROR] ${safeError}`);
+      }
+    });
+    unresolved = unresolved.filter(
+      (projectId) => !result.byProjectId.has(projectId),
+    );
+  });
+  result.notFound = unresolved.filter(
+    (projectId) => !failedProjectIds.has(projectId),
+  ).length;
+  return result;
+}
+
+function fetchProjectIdSummaryProjectMetadataFromTable_(
+  projectIds,
+  source,
+  settings,
+) {
+  if (projectIds.length === 0) return new Map();
+  const literals = projectIds
+    .map((projectId) => postHogStringLiteral_(projectId))
+    .join(', ');
+  const projectIdExpression = `toString(p.${settings.projectIdField})`;
+  const query = [
+    'SELECT',
+    `  ${projectIdExpression} AS project_id,`,
+    `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_ENGINE_VERSION_FIELD} ` +
+      'AS engine_version,',
+    `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_CREATED_AT_FIELD} ` +
+      'AS created_at,',
+    `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_UPDATED_AT_FIELD} ` +
+      'AS updated_at,',
+    `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_LAST_STATUS_UPDATED_AT_FIELD} ` +
+      'AS last_status_updated_at,',
+    `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_DESIGN_UPDATED_AT_FIELD} ` +
+      'AS design_updated_at',
+    `FROM ${source.table} AS p`,
+    `WHERE ${projectIdExpression} IN (${literals})`,
+    `ORDER BY p.${settings.sourceUpdatedAtField} DESC, ${projectIdExpression}`,
+    `LIMIT ${Math.max(projectIds.length * 2, projectIds.length)}`,
+  ].join('\n');
+  const response = executePostHogHogQL_(
+    query,
+    `goodleap_apps_script_${source.queryLabel}_project_metadata`,
+  );
+  return parseProjectIdSummaryProjectMetadata_(response, source.label);
+}
+
+function parseProjectIdSummaryProjectMetadata_(response, lookupSource) {
+  const columns = response.columns.map((column) => String(column).toLowerCase());
+  const requiredColumns = [
+    'project_id',
+    'engine_version',
+    'created_at',
+    'updated_at',
+    'last_status_updated_at',
+    'design_updated_at',
+  ];
+  const indexes = {};
+  requiredColumns.forEach((column) => {
+    indexes[column] = columns.indexOf(column);
+  });
+  const missing = requiredColumns.filter((column) => indexes[column] < 0);
+  if (missing.length > 0) {
+    throw new Error(
+      `Unexpected PostHog project metadata columns; missing: ` +
+      `${missing.join(', ')}. Returned: ${response.columns.join(', ')}.`,
+    );
+  }
+
+  const byProjectId = new Map();
+  response.results.forEach((row) => {
+    const projectId = String(row[indexes.project_id] || '')
+      .trim()
+      .toLowerCase();
+    if (!isProjectIdSummaryUuid_(projectId) || byProjectId.has(projectId)) {
+      return;
+    }
+    const rawEngineVersion = row[indexes.engine_version];
+    byProjectId.set(projectId, {
+      lookupSource,
+      engineVersion:
+        rawEngineVersion === null || rawEngineVersion === undefined
+          ? ''
+          : String(rawEngineVersion).trim(),
+      createdAt: normalizeProjectIdSummaryDate_(row[indexes.created_at]),
+      updatedAt: normalizeProjectIdSummaryDate_(row[indexes.updated_at]),
+      lastStatusUpdatedAt: normalizeProjectIdSummaryDate_(
+        row[indexes.last_status_updated_at],
+      ),
+      designUpdatedAt: normalizeProjectIdSummaryDate_(
+        row[indexes.design_updated_at],
+      ),
+    });
+  });
+  return byProjectId;
+}
+
 function loadExistingProjectIdSummaryMapData_(sheet) {
   const byProjectId = new Map();
   if (!sheet || sheet.getLastRow() < 2) return byProjectId;
@@ -518,6 +802,39 @@ function loadExistingProjectIdSummaryMapData_(sheet) {
     byProjectId.set(projectId, {
       mapDataSource: String(row[mapDataSourceIndex] || '').trim(),
       rgbBasemapUrl: safeProjectIdSummaryUrl_(row[rgbBasemapUrlIndex]),
+    });
+  });
+  return byProjectId;
+}
+
+function loadExistingProjectIdSummaryProjectMetadata_(sheet) {
+  const byProjectId = new Map();
+  if (!sheet || sheet.getLastRow() < 2) return byProjectId;
+  const values = sheet
+    .getRange(1, 1, sheet.getLastRow(), PROJECT_ID_SUMMARY_HEADERS.length)
+    .getValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const projectIdIndex = headers.indexOf('Project ID');
+  const metadataIndexes = PROJECT_ID_SUMMARY_POSTHOG_HEADERS.map(
+    (header) => headers.indexOf(header),
+  );
+  if (projectIdIndex < 0 || metadataIndexes.some((index) => index < 0)) {
+    return byProjectId;
+  }
+
+  values.slice(1).forEach((row) => {
+    const projectId = String(row[projectIdIndex] || '').trim().toLowerCase();
+    if (!isProjectIdSummaryUuid_(projectId)) return;
+    byProjectId.set(projectId, {
+      engineVersion: String(row[metadataIndexes[0]] || '').trim(),
+      createdAt: normalizeProjectIdSummaryDate_(row[metadataIndexes[1]]),
+      updatedAt: normalizeProjectIdSummaryDate_(row[metadataIndexes[2]]),
+      lastStatusUpdatedAt: normalizeProjectIdSummaryDate_(
+        row[metadataIndexes[3]],
+      ),
+      designUpdatedAt: normalizeProjectIdSummaryDate_(
+        row[metadataIndexes[4]],
+      ),
     });
   });
   return byProjectId;
@@ -808,6 +1125,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -824,7 +1145,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   ) {
     console.log(
       'Project ID Summary schema upgraded: Map Data Source, RGB Basemap URL, ' +
-      'Production Category Group, and Shade Report Deltas were appended.',
+      'Production Category Group, Shade Report Deltas, and PostHog project ' +
+      'metadata were appended.',
     );
   } else if (
     projectIdSummaryHeadersMatch_(
@@ -834,7 +1156,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   ) {
     console.log(
       'Project ID Summary schema upgraded: Production Category Group and ' +
-      'Shade Report Delta columns were appended.',
+      'Shade Report Delta and PostHog project metadata columns were appended.',
     );
   } else if (
     projectIdSummaryHeadersMatch_(
@@ -843,7 +1165,18 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     )
   ) {
     console.log(
-      'Project ID Summary schema upgraded: Shade Report Delta columns were appended.',
+      'Project ID Summary schema upgraded: Shade Report Delta and PostHog ' +
+      'project metadata columns were appended.',
+    );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4,
+    )
+  ) {
+    console.log(
+      'Project ID Summary schema upgraded: Engine Version and project date ' +
+      'columns were appended.',
     );
   }
 
@@ -864,6 +1197,17 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_HEADER_BACKGROUND);
+  const metadataStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.length + 1;
+  sheet
+    .getRange(
+      1,
+      metadataStartColumn,
+      1,
+      PROJECT_ID_SUMMARY_POSTHOG_HEADERS.length,
+    )
+    .setBackground(
+      PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND,
+    );
   sheet.setFrozenRows(1);
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
   sheet.setColumnWidth(1, 280);
@@ -878,6 +1222,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
     135,
   );
+  sheet.setColumnWidth(metadataStartColumn, 135);
+  sheet.setColumnWidths(metadataStartColumn + 1, 4, 180);
   return sheet;
 }
 
@@ -943,6 +1289,24 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
     .setNumberFormat('0.####')
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_DATA_BACKGROUND)
     .setWrap(false);
+  const metadataStartColumn = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4.length + 1;
+  sheet
+    .getRange(
+      2,
+      metadataStartColumn,
+      rows.length,
+      PROJECT_ID_SUMMARY_POSTHOG_HEADERS.length,
+    )
+    .setBackground(
+      PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND,
+    )
+    .setWrap(false);
+  sheet
+    .getRange(2, metadataStartColumn, rows.length, 1)
+    .setNumberFormat('@');
+  sheet
+    .getRange(2, metadataStartColumn + 1, rows.length, 4)
+    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
 
   const richUrls = rows.map((row) => {
     const url = String(row[1] || '').trim();
