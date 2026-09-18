@@ -258,7 +258,11 @@ It:
   of its categorized emails contains the exact `Production` value in
   `Categories`; otherwise it uses `Other Categories without Production`.
   Projects without a categorized email remain blank. The group occupies column
-  AA, immediately before the Shade Report Delta columns.
+  AA. Column AB, `Is tolerance into the range [-5%, +15%]`, evaluates the
+  calculated `(Bench-Art)/Art %`: it stores `TRUE` for inclusive values from
+  -5% through +15%, `FALSE` outside that range, and remains blank when the
+  percentage cannot be calculated. TRUE cells are green and FALSE cells are
+  pink. Shade Report Delta columns begin in AC.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
@@ -273,7 +277,7 @@ It:
   `last_status_updated_at`, and `design_updated_at` from the GoodLeap projects
   table, with Artemis Sales as fallback. The corresponding `Engine Version`,
   `Created At`, `Updated At`, `Last Status Updated At`, and `Design Updated At`
-  columns occupy AW:BA and retain prior successful values after temporary
+  columns occupy AX:BB and retain prior successful values after temporary
   PostHog query failures.
 - Applies wrapped text to every cell in `Project ID Summary` on setup and every
   refresh, including the header and all currently allocated blank cells.
@@ -957,7 +961,9 @@ No new Script Property or trigger is required.
    them right. It also appends `Map Data Source`, `RGB Basemap URL`, the latest
    Gmail context and AI production values, the calculated
    `(Bench-Art)/Art %`,
-   `Production Category Group`, and the Shade Report Delta columns plus
+   `Production Category Group`,
+   `Is tolerance into the range [-5%, +15%]`, and the Shade Report Delta
+   columns plus
    `Absolute Delta Azimuth`, `Absolute Delta Pitch`, `Absolute Azimuth + Pitch`,
    `Engine Version`, `Created At`, `Updated At`, `Last Status Updated At`, and
    `Design Updated At` to legacy layouts and backfills historical projects.
@@ -968,7 +974,9 @@ No new Script Property or trigger is required.
    `Recalculated Weighted Average` rows in `Shade Reports Comparison`, the three
    absolute metrics are calculated, `(Bench-Art)/Art %` matches
    `(Benchmark - Proposed) / Proposed` and displays as a percentage, all cells
-   use wrapped text,
+   use wrapped text, the tolerance-range column contains real booleans with
+   inclusive -5% and +15% boundaries (green TRUE, pink FALSE, blank when the
+   percentage is unavailable),
    the project metadata matches PostHog, and AK, HI, and PR map to Alaska,
    Hawaii, and Puerto Rico rather than the four continental regions.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
@@ -1347,9 +1355,11 @@ The deployment is ready only when all of the following are true:
   three contextual AI fields, while V:Z contain the date, Proposed Production,
   Benchmark Production, the calculated `(Bench-Art)/Art %`, and the source
   `Tolerance %` from the same newest matching `AI Analysis` row. `Production
-  Category Group` occupies AA. The three
+  Category Group` occupies AA. Column AB contains the boolean
+  `Is tolerance into the range [-5%, +15%]`, calculated from `(Bench-Art)/Art
+  %` with inclusive limits and green/pink status formatting. The three
   highlighted absolute columns show the absolute Azimuth Delta, absolute Pitch
-  Delta, and their sum. Columns AW:BA show the project engine version and four
+  Delta, and their sum. Columns AX:BB show the project engine version and four
   project lifecycle timestamps from the GoodLeap or Artemis Sales project
   record. `US State Regions` contains the static regional association, with
   Alaska, Hawaii, and Puerto Rico represented as separate regions.

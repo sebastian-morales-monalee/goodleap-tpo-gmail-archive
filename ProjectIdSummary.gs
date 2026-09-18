@@ -24,6 +24,8 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   ABSOLUTE_DELTA_HEADER_BACKGROUND: '#7f6000',
   ABSOLUTE_DELTA_DATA_BACKGROUND: '#f9cb9c',
   LATEST_AI_DATA_BACKGROUND: '#ffffff',
+  TOLERANCE_TRUE_BACKGROUND: '#b7e1cd',
+  TOLERANCE_FALSE_BACKGROUND: '#f4cccc',
   PROJECT_METADATA_HEADER_BACKGROUND: '#38761d',
   PROJECT_METADATA_DATA_BACKGROUND: '#e2f0d9',
   TAB_COLOR: '#7200c9',
@@ -207,10 +209,16 @@ const PROJECT_ID_SUMMARY_BASE_HEADERS = [
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(2),
 );
 
+const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER =
+  'Is tolerance into the range [-5%, +15%]';
+
 const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
-  ['Production Category Group'],
+  [
+    'Production Category Group',
+    PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
+  ],
   PROJECT_ID_SUMMARY_DELTA_HEADERS,
   PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
 );
@@ -301,6 +309,14 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11 =
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12 =
+  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    ['Production Category Group'],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
   PROJECT_ID_SUMMARY_BASE_HEADERS.length;
 const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
@@ -309,8 +325,10 @@ const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
 const PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX =
   PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX +
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length;
-const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
+const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX =
   PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
+const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
+  PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
   PROJECT_ID_SUMMARY_DELTA_START_INDEX +
   PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
@@ -453,6 +471,8 @@ function previewProjectIdSummary() {
       row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
     productionCategoryGroup:
       row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX] || '',
+    [PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER]:
+      row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX],
     shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
       (result, header, offset) => {
         result[header] = row[PROJECT_ID_SUMMARY_DELTA_START_INDEX + offset];
@@ -632,6 +652,11 @@ function buildProjectIdSummary_(spreadsheet, options) {
       projectMetadataLookup.byProjectId.get(project.key);
     const projectMetadata = refreshedProjectMetadata ||
       existingProjectMetadata.get(project.key) || {};
+    const benchArtPercent =
+      calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
+        email.latestBenchmarkProductionKwh,
+        email.latestProposedProductionKwh,
+      );
 
     rows.push([
       project.projectId,
@@ -658,12 +683,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
       email.latestAnalysisReceivedAt,
       email.latestProposedProductionKwh,
       email.latestBenchmarkProductionKwh,
-      calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
-        email.latestBenchmarkProductionKwh,
-        email.latestProposedProductionKwh,
-      ),
+      benchArtPercent,
       email.latestTolerancePercent,
       getProjectIdSummaryCategoryGroup_(email),
+      calculateProjectIdSummaryToleranceRange_(benchArtPercent),
     ].concat(
       deltaValues,
       [
@@ -813,6 +836,15 @@ function buildProjectIdSummaryStats_(summary) {
       (row) => Number.isFinite(
         row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
       ),
+    ).length,
+    projectsWithinCalculatedTolerance: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX] === true,
+    ).length,
+    projectsOutsideCalculatedTolerance: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX] === false,
+    ).length,
+    projectsWithoutCalculatedTolerance: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX] === '',
     ).length,
     mapFoundInGoodLeap: summary.mapLookup.foundInGoodLeap,
     mapFoundInArtemisSales: summary.mapLookup.foundInArtemisSales,
@@ -1565,6 +1597,12 @@ function calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
   return (benchmark - proposed) / proposed;
 }
 
+function calculateProjectIdSummaryToleranceRange_(benchArtPercent) {
+  const value = normalizeProjectIdSummaryNumber_(benchArtPercent);
+  if (!Number.isFinite(value)) return '';
+  return value >= -0.05 && value <= 0.15;
+}
+
 /** Uses the same exact multi-value matching rule as AI Dashboard. */
 function projectIdSummaryCategoriesIncludeProduction_(value) {
   if (typeof doesAIAnalysisCategoriesIncludeProduction_ === 'function') {
@@ -1873,6 +1911,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -2039,6 +2081,22 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'Project ID Summary schema upgraded: the calculated percentage header ' +
       'was normalized to (Bench-Art)/Art %. Existing values were preserved.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: ' +
+      `${PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER} was inserted after ` +
+      'Production Category Group. Existing Delta and PostHog values were ' +
+      'shifted safely.',
+    );
   }
 
   sheet
@@ -2053,6 +2111,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   const aiContextStartColumn = PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1;
   const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
   const categoryGroupColumn = PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
+  const toleranceRangeColumn = PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
     .getRange(
@@ -2100,6 +2159,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(latestAiStartColumn + 3, 165);
   sheet.setColumnWidth(latestAiStartColumn + 4, 135);
   sheet.setColumnWidth(categoryGroupColumn, 260);
+  sheet.setColumnWidth(toleranceRangeColumn, 190);
   sheet.setColumnWidths(
     deltaStartColumn,
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
@@ -2171,6 +2231,12 @@ function migrateProjectIdSummarySchema_(sheet, sourceHeaders) {
         PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh')
       ],
     );
+    migratedRow[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX] =
+      calculateProjectIdSummaryToleranceRange_(
+        migratedRow[
+          PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')
+        ],
+      );
     return migratedRow;
   });
 
@@ -2201,6 +2267,33 @@ function styleProjectIdSummaryAbsoluteDeltaColumns_(
     const column = PROJECT_ID_SUMMARY_HEADERS.indexOf(header) + 1;
     sheet.getRange(startRow, column, rowCount, 1).setBackground(background);
   });
+}
+
+function styleProjectIdSummaryToleranceRangeColumn_(
+  sheet,
+  startRow,
+  rowCount,
+) {
+  if (rowCount < 1) return;
+  const range = sheet.getRange(
+    startRow,
+    PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1,
+    rowCount,
+    1,
+  );
+  const backgrounds = range.getValues().map((row) => {
+    if (row[0] === true) {
+      return [PROJECT_ID_SUMMARY_CONFIG.TOLERANCE_TRUE_BACKGROUND];
+    }
+    if (row[0] === false) {
+      return [PROJECT_ID_SUMMARY_CONFIG.TOLERANCE_FALSE_BACKGROUND];
+    }
+    return [PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND];
+  });
+  range
+    .setBackgrounds(backgrounds)
+    .setHorizontalAlignment('center')
+    .setWrap(true);
 }
 
 function applyProjectIdSummaryWrap_(sheet) {
@@ -2297,6 +2390,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);
+  styleProjectIdSummaryToleranceRangeColumn_(sheet, startRow, rowCount);
 
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
