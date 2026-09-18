@@ -4,13 +4,15 @@
  * This file belongs in the SAME Apps Script project as OpenAIAnalysis.gs. It
  * reads "AI Analysis", maintains the complete weekly history in
  * "AI Weekly Summary", and shows one all-time Primary Category chart, one
- * stacked weekly Production-versus-other trend based on Categories, plus the
- * eight most recent Primary Category charts in "AI Dashboard". It does not
- * call OpenAI, Gmail, Drive, or PostHog.
+ * stacked weekly Production-versus-other trend based on Categories, one
+ * stacked weekly project-production status chart, plus the eight most recent
+ * Primary Category charts in "AI Dashboard". It does not call OpenAI, Gmail,
+ * Drive, or PostHog.
  *
  * Safe first-run sequence:
- *   1) previewAIAnalysisDashboard()
- *   2) setupAIAnalysisDashboard()
+ *   1) setupProjectIdSummary()
+ *   2) previewAIAnalysisDashboard()
+ *   3) setupAIAnalysisDashboard()
  *
  * OpenAIAnalysis.gs calls refreshAIAnalysisDashboardSafely_() after each
  * automatic analysis check. The existing five-minute trigger is sufficient.
@@ -65,6 +67,17 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   WEEKLY_MATRIX_TITLE: 'Weekly Category Matrix',
   WEEKLY_MATRIX_START_COLUMN: 8,
   WEEKLY_CHART_MATRIX_TITLE: 'Weekly Production vs Other Categories',
+  PRODUCTION_PROJECTS_MATRIX_TITLE: 'Weekly Production Projects',
+  PROJECT_SUMMARY_SHEET_NAME: 'Project ID Summary',
+  PROJECT_ID_HEADER: 'Project ID',
+  PROJECT_CREATED_AT_HEADER: 'Created At',
+  PROJECT_TOLERANCE_HEADER: 'Is tolerance into the range [-5%, +15%]',
+  PROJECT_INSIDE_RANGE_LABEL: 'Production Inside the Range',
+  PROJECT_OUTSIDE_RANGE_LABEL: 'Production Outside the Range',
+  PROJECT_WITHOUT_DATA_LABEL: 'Without Production Data',
+  PROJECT_INSIDE_RANGE_COLOR: '#b7e1cd',
+  PROJECT_OUTSIDE_RANGE_COLOR: '#f4cccc',
+  PROJECT_WITHOUT_DATA_COLOR: '#9aa0a6',
   PRODUCTION_CATEGORY: 'Production',
   PRODUCTION_SERIES_LABEL: 'Production with other categories',
   OTHER_CATEGORIES_LABEL: 'Other Categories without Production',
@@ -77,8 +90,9 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   WEEKLY_BLOCK_HEIGHT: 28,
   CHART_COLUMN: 5,
   STACKED_CHART_COLUMN: 15,
+  PRODUCTION_PROJECTS_CHART_COLUMN: 25,
   LAYOUT_NOTE:
-    'Managed AI Dashboard layout v7: visible labeled Categories-based Production trend and Primary Category charts.',
+    'Managed AI Dashboard layout v8: visible labeled email and project Production trends plus Primary Category charts.',
   HEADER_COLOR: '#6e04bd',
   HEADER_TEXT_COLOR: '#ffffff',
   CHART_COLOR: '#4285f4',
@@ -143,6 +157,15 @@ function previewAIAnalysisDashboard() {
         );
       });
     });
+  summary.productionProjects.weeks.forEach((week) => {
+    console.log(
+      `[WEEKLY PRODUCTION PROJECTS] ${week.start} to ${week.end} | ` +
+      `inside=${week.insideRangeCount} | ` +
+      `outside=${week.outsideRangeCount} | ` +
+      `withoutData=${week.withoutProductionDataCount} | ` +
+      `total=${week.totalCount}`,
+    );
+  });
 
   const stats = buildAIAnalysisDashboardStats_(summary, null, null);
   console.log(JSON.stringify(stats, null, 2));
@@ -293,6 +316,7 @@ function loadAIAnalysisDashboardSummary_(spreadsheet) {
       otherCategoriesCount: week.otherCategoriesCount,
     }))
     .sort((left, right) => right.start.localeCompare(left.start));
+  const productionProjects = loadAIWeeklyProductionProjects_(spreadsheet);
 
   assertAIAnalysisDashboardCapacity_(rows, weeks);
   return {
@@ -301,7 +325,117 @@ function loadAIAnalysisDashboardSummary_(spreadsheet) {
     weeks,
     uncategorizedRows,
     excludedFromWeeklyCount,
+    productionProjects,
   };
+}
+
+function loadAIWeeklyProductionProjects_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_SUMMARY_SHEET_NAME,
+  );
+  if (!sheet || sheet.getLastRow() === 0) {
+    throw new Error(
+      'Project ID Summary is missing or empty. Run setupProjectIdSummary() ' +
+      'before setupAIAnalysisDashboard().',
+    );
+  }
+
+  const values = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const projectIdIndex = requireAIAnalysisDashboardHeader_(
+    headers,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_ID_HEADER,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_SUMMARY_SHEET_NAME,
+  );
+  const createdAtIndex = requireAIAnalysisDashboardHeader_(
+    headers,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATED_AT_HEADER,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_SUMMARY_SHEET_NAME,
+  );
+  const toleranceIndex = requireAIAnalysisDashboardHeader_(
+    headers,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_TOLERANCE_HEADER,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_SUMMARY_SHEET_NAME,
+  );
+  const weeklyCounts = new Map();
+  const seenProjectIds = new Set();
+  let totalProjects = 0;
+  let projectsWithoutCreatedAt = 0;
+  let duplicateProjectRows = 0;
+
+  values.slice(1).forEach((row) => {
+    const projectId = String(row[projectIdIndex] || '').trim().toLowerCase();
+    if (!projectId) return;
+    if (seenProjectIds.has(projectId)) {
+      duplicateProjectRows += 1;
+      return;
+    }
+    seenProjectIds.add(projectId);
+    totalProjects += 1;
+
+    const createdAt = normalizeAIAnalysisDashboardDate_(row[createdAtIndex]);
+    if (!createdAt) {
+      projectsWithoutCreatedAt += 1;
+      return;
+    }
+    const bounds = getAIAnalysisWeekBounds_(createdAt);
+    if (!weeklyCounts.has(bounds.start)) {
+      weeklyCounts.set(bounds.start, {
+        start: bounds.start,
+        end: bounds.end,
+        insideRangeCount: 0,
+        outsideRangeCount: 0,
+        withoutProductionDataCount: 0,
+      });
+    }
+    const weeklyEntry = weeklyCounts.get(bounds.start);
+    const status = classifyAIWeeklyProductionProject_(row[toleranceIndex]);
+    if (status === 'inside') {
+      weeklyEntry.insideRangeCount += 1;
+    } else if (status === 'outside') {
+      weeklyEntry.outsideRangeCount += 1;
+    } else {
+      weeklyEntry.withoutProductionDataCount += 1;
+    }
+  });
+
+  const weeks = Array.from(weeklyCounts.values())
+    .map((week) => ({
+      ...week,
+      totalCount:
+        week.insideRangeCount +
+        week.outsideRangeCount +
+        week.withoutProductionDataCount,
+    }))
+    .sort((left, right) => right.start.localeCompare(left.start));
+  return {
+    totalProjects,
+    projectsWithCreatedAt: totalProjects - projectsWithoutCreatedAt,
+    projectsWithoutCreatedAt,
+    duplicateProjectRows,
+    weeks,
+  };
+}
+
+function classifyAIWeeklyProductionProject_(value) {
+  if (value === true) return 'inside';
+  if (value === false) return 'outside';
+  const normalized = String(value == null ? '' : value)
+    .trim()
+    .toUpperCase();
+  if (normalized === 'TRUE') return 'inside';
+  if (normalized === 'FALSE') return 'outside';
+  return 'withoutData';
+}
+
+function requireAIAnalysisDashboardHeader_(headers, header, sheetName) {
+  const index = headers.indexOf(header);
+  if (index < 0) {
+    throw new Error(`${sheetName} is missing the required ${header} header.`);
+  }
+  return index;
 }
 
 function doesAIAnalysisCategoriesIncludeProduction_(value) {
@@ -498,6 +632,31 @@ function buildAIWeeklyChartMatrix_(summary, matrix) {
   };
 }
 
+function buildAIWeeklyProductionProjectsMatrix_(summary, chartMatrix) {
+  const rows = summary.productionProjects.weeks
+    .slice()
+    .reverse()
+    .map((week) => [
+      `${week.start} to ${week.end}`,
+      week.insideRangeCount,
+      week.outsideRangeCount,
+      week.withoutProductionDataCount,
+      week.totalCount,
+    ]);
+  return {
+    headers: [
+      'Week',
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_INSIDE_RANGE_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_OUTSIDE_RANGE_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_WITHOUT_DATA_LABEL,
+      'Total',
+    ],
+    rows,
+    startColumn:
+      chartMatrix.startColumn + chartMatrix.headers.length + 1,
+  };
+}
+
 function writeAIWeeklySummary_(spreadsheet, summary, force) {
   let sheet = spreadsheet.getSheetByName(
     AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME,
@@ -512,9 +671,17 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
   const output = buildAIWeeklySummaryOutput_(summary);
   const matrix = buildAIWeeklyMatrix_(summary);
   const chartMatrix = buildAIWeeklyChartMatrix_(summary, matrix);
+  const productionProjectsMatrix =
+    buildAIWeeklyProductionProjectsMatrix_(summary, chartMatrix);
   if (
     !force &&
-    doesAIWeeklySummaryMatch_(sheet, output, matrix, chartMatrix)
+    doesAIWeeklySummaryMatch_(
+      sheet,
+      output,
+      matrix,
+      chartMatrix,
+      productionProjectsMatrix,
+    )
   ) {
     return {
       sheet: sheet.getName(),
@@ -525,6 +692,8 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
       matrixRows: matrix.rows.length,
       matrixCategories: matrix.categories.length,
       chartMatrixSeries: 2,
+      productionProjectsMatrixRows: productionProjectsMatrix.rows.length,
+      productionProjectsMatrixSeries: 3,
     };
   }
 
@@ -536,12 +705,19 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
     AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_START_COLUMN +
     matrix.headers.length -
     1;
-  const chartMatrixLastColumn =
-    chartMatrix.startColumn + chartMatrix.headers.length - 1;
+  const productionProjectsMatrixLastColumn =
+    productionProjectsMatrix.startColumn +
+    productionProjectsMatrix.headers.length -
+    1;
   ensureAIAnalysisSheetCapacity_(
     sheet,
-    Math.max(output.length + 2, matrix.rows.length + 3),
-    chartMatrixLastColumn + 1,
+    Math.max(
+      output.length + 2,
+      matrix.rows.length + 3,
+      chartMatrix.rows.length + 3,
+      productionProjectsMatrix.rows.length + 3,
+    ),
+    productionProjectsMatrixLastColumn + 1,
   );
   sheet.setHiddenGridlines(false);
   sheet.setFrozenRows(1);
@@ -658,6 +834,57 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
   }
   sheet.setColumnWidth(chartMatrix.startColumn, 220);
   sheet.setColumnWidths(chartMatrix.startColumn + 1, 3, 145);
+
+  sheet
+    .getRange(
+      1,
+      productionProjectsMatrix.startColumn,
+      1,
+      productionProjectsMatrix.headers.length,
+    )
+    .merge()
+    .setValue(AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE)
+    .setFontWeight('bold')
+    .setBackground(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_COLOR)
+    .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR)
+    .setHorizontalAlignment('center');
+  sheet
+    .getRange(
+      2,
+      productionProjectsMatrix.startColumn,
+      1,
+      productionProjectsMatrix.headers.length,
+    )
+    .setValues([productionProjectsMatrix.headers])
+    .setFontWeight('bold')
+    .setBackground(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_COLOR)
+    .setFontColor(AI_ANALYSIS_DASHBOARD_CONFIG.HEADER_TEXT_COLOR)
+    .setWrap(true);
+  if (productionProjectsMatrix.rows.length > 0) {
+    sheet
+      .getRange(
+        3,
+        productionProjectsMatrix.startColumn,
+        productionProjectsMatrix.rows.length,
+        productionProjectsMatrix.headers.length,
+      )
+      .setValues(productionProjectsMatrix.rows);
+    sheet
+      .getRange(
+        3,
+        productionProjectsMatrix.startColumn + 1,
+        productionProjectsMatrix.rows.length,
+        productionProjectsMatrix.headers.length - 1,
+      )
+      .setNumberFormat('0');
+  }
+  sheet.setColumnWidth(productionProjectsMatrix.startColumn, 220);
+  sheet.setColumnWidths(
+    productionProjectsMatrix.startColumn + 1,
+    3,
+    190,
+  );
+  sheet.setColumnWidth(productionProjectsMatrixLastColumn, 100);
   return {
     sheet: sheet.getName(),
     updated: true,
@@ -667,10 +894,18 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
     matrixRows: matrix.rows.length,
     matrixCategories: matrix.categories.length,
     chartMatrixSeries: 2,
+    productionProjectsMatrixRows: productionProjectsMatrix.rows.length,
+    productionProjectsMatrixSeries: 3,
   };
 }
 
-function doesAIWeeklySummaryMatch_(sheet, output, matrix, chartMatrix) {
+function doesAIWeeklySummaryMatch_(
+  sheet,
+  output,
+  matrix,
+  chartMatrix,
+  productionProjectsMatrix,
+) {
   if (sheet.getLastRow() < 1 || sheet.getLastColumn() < 6) {
     return false;
   }
@@ -706,7 +941,11 @@ function doesAIWeeklySummaryMatch_(sheet, output, matrix, chartMatrix) {
   }
   return (
     doesAIWeeklyMatrixMatch_(sheet, matrix) &&
-    doesAIWeeklyChartMatrixMatch_(sheet, chartMatrix)
+    doesAIWeeklyChartMatrixMatch_(sheet, chartMatrix) &&
+    doesAIWeeklyProductionProjectsMatrixMatch_(
+      sheet,
+      productionProjectsMatrix,
+    )
   );
 }
 
@@ -833,6 +1072,62 @@ function doesAIWeeklyChartMatrixMatch_(sheet, chartMatrix) {
   ).trim();
 }
 
+function doesAIWeeklyProductionProjectsMatrixMatch_(sheet, matrix) {
+  const startColumn = matrix.startColumn;
+  if (
+    sheet.getMaxColumns() < startColumn + matrix.headers.length ||
+    sheet.getMaxRows() < matrix.rows.length + 3
+  ) {
+    return false;
+  }
+  if (
+    String(sheet.getRange(1, startColumn).getDisplayValue()).trim() !==
+    AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE
+  ) {
+    return false;
+  }
+  const headers = sheet
+    .getRange(2, startColumn, 1, matrix.headers.length)
+    .getDisplayValues()[0];
+  if (
+    headers.some(
+      (header, index) => String(header).trim() !== matrix.headers[index],
+    )
+  ) {
+    return false;
+  }
+  if (
+    String(
+      sheet
+        .getRange(2, startColumn + matrix.headers.length)
+        .getDisplayValue(),
+    ).trim()
+  ) {
+    return false;
+  }
+  if (matrix.rows.length === 0) {
+    return !String(sheet.getRange(3, startColumn).getDisplayValue()).trim();
+  }
+  const existing = sheet
+    .getRange(3, startColumn, matrix.rows.length, matrix.headers.length)
+    .getValues();
+  const valuesMatch = matrix.rows.every((row, rowIndex) =>
+    row.every((value, columnIndex) => {
+      const current = existing[rowIndex][columnIndex];
+      if (columnIndex === 0) {
+        return String(current).trim() === String(value).trim();
+      }
+      return Number(current) === Number(value);
+    }),
+  );
+  if (!valuesMatch) return false;
+  return !String(
+    sheet
+      .getRange(matrix.rows.length + 3, startColumn)
+      .getDisplayValue(),
+  ).trim();
+}
+
 function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
   let sheet = spreadsheet.getSheetByName(
     AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME,
@@ -849,11 +1144,15 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_LIMIT,
   );
   const matrix = buildAIWeeklyMatrix_(summary);
+  const chartMatrix = buildAIWeeklyChartMatrix_(summary, matrix);
+  const productionProjectsMatrix =
+    buildAIWeeklyProductionProjectsMatrix_(summary, chartMatrix);
   const layoutMatches = doesAIAnalysisDashboardLayoutMatch_(
     sheet,
     summary,
     visibleWeeks,
     matrix,
+    productionProjectsMatrix,
   );
   if (
     !force &&
@@ -876,7 +1175,13 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
   } else {
     clearAIAnalysisDashboardValues_(sheet, visibleWeeks.length);
   }
-  writeAIAnalysisDashboardValues_(sheet, summary, visibleWeeks, matrix);
+  writeAIAnalysisDashboardValues_(
+    sheet,
+    summary,
+    visibleWeeks,
+    matrix,
+    productionProjectsMatrix,
+  );
   if (rebuildLayout) {
     insertAIAnalysisDashboardCharts_(
       spreadsheet,
@@ -884,6 +1189,7 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
       summary,
       visibleWeeks,
       matrix,
+      productionProjectsMatrix,
     );
   }
   SpreadsheetApp.flush();
@@ -905,6 +1211,7 @@ function initializeAIAnalysisDashboardLayout_(sheet, visibleWeeks) {
     Math.max(
       AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLUMN,
       AI_ANALYSIS_DASHBOARD_CONFIG.STACKED_CHART_COLUMN,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_CHART_COLUMN,
     ),
   );
   sheet.getCharts().forEach((chart) => sheet.removeChart(chart));
@@ -946,11 +1253,14 @@ function writeAIAnalysisDashboardValues_(
   summary,
   visibleWeeks,
   matrix,
+  productionProjectsMatrix,
 ) {
   sheet
     .getRange('A1')
     .setValue(AI_ANALYSIS_DASHBOARD_CONFIG.TITLE)
-    .setNote(buildAIAnalysisDashboardLayoutNote_(matrix));
+    .setNote(
+      buildAIAnalysisDashboardLayoutNote_(matrix, productionProjectsMatrix),
+    );
   sheet.getRange('A2').setValue('Updated At').setFontWeight('bold');
   sheet
     .getRange('B2')
@@ -1034,6 +1344,7 @@ function insertAIAnalysisDashboardCharts_(
   summary,
   visibleWeeks,
   matrix,
+  productionProjectsMatrix,
 ) {
   if (summary.rows.length > 0) {
     insertAIAnalysisCategoryChart_(
@@ -1043,7 +1354,10 @@ function insertAIAnalysisDashboardCharts_(
       'All-time Count of Primary Category',
     );
   }
-  if (matrix.rows.length > 0) {
+  if (
+    matrix.rows.length > 0 ||
+    productionProjectsMatrix.rows.length > 0
+  ) {
     const weeklySheet = spreadsheet.getSheetByName(
       AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME,
     );
@@ -1052,11 +1366,20 @@ function insertAIAnalysisDashboardCharts_(
         'AI Weekly Summary is missing. Run setupAIAnalysisDashboard() again.',
       );
     }
-    insertAIWeeklyStackedChart_(
-      sheet,
-      weeklySheet,
-      buildAIWeeklyChartMatrix_(summary, matrix),
-    );
+    if (matrix.rows.length > 0) {
+      insertAIWeeklyStackedChart_(
+        sheet,
+        weeklySheet,
+        buildAIWeeklyChartMatrix_(summary, matrix),
+      );
+    }
+    if (productionProjectsMatrix.rows.length > 0) {
+      insertAIWeeklyProductionProjectsChart_(
+        sheet,
+        weeklySheet,
+        productionProjectsMatrix,
+      );
+    }
   }
   visibleWeeks.forEach((week, index) => {
     const startRow = getAIAnalysisWeeklyBlockStartRow_(index);
@@ -1179,6 +1502,72 @@ function insertAIWeeklyStackedChart_(dashboardSheet, weeklySheet, chartMatrix) {
   dashboardSheet.insertChart(chart);
 }
 
+function insertAIWeeklyProductionProjectsChart_(
+  dashboardSheet,
+  weeklySheet,
+  matrix,
+) {
+  const chartRange = weeklySheet.getRange(
+    2,
+    matrix.startColumn,
+    matrix.rows.length + 1,
+    4,
+  );
+  const colors = [
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_INSIDE_RANGE_COLOR,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_OUTSIDE_RANGE_COLOR,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_WITHOUT_DATA_COLOR,
+  ];
+  const series = {};
+  colors.forEach((color, index) => {
+    series[index] = {
+      color,
+      dataLabel: 'value',
+      annotations: {
+        textStyle: {
+          color: '#000000',
+          fontSize: 16,
+          bold: true,
+          auraColor: 'none',
+        },
+      },
+    };
+  });
+  const chart = dashboardSheet
+    .newChart()
+    .asColumnChart()
+    .addRange(chartRange)
+    .setNumHeaders(1)
+    .setPosition(
+      2,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_CHART_COLUMN,
+      0,
+      0,
+    )
+    .setOption(
+      'title',
+      AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE,
+    )
+    .setOption('isStacked', true)
+    .setOption('legend', {position: 'top'})
+    .setOption('colors', colors)
+    .setOption('series', series)
+    .setOption('width', 1000)
+    .setOption('height', 500)
+    .setOption('hAxis', {
+      title: 'Week',
+      slantedText: true,
+      slantedTextAngle: 30,
+    })
+    .setOption('vAxis', {
+      title: 'Projects',
+      minValue: 0,
+      format: '0',
+    })
+    .build();
+  dashboardSheet.insertChart(chart);
+}
+
 function getAIAnalysisCategoryColor_(category, index) {
   const configuredColor =
     AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_COLORS[category];
@@ -1195,13 +1584,14 @@ function doesAIAnalysisDashboardLayoutMatch_(
   summary,
   visibleWeeks,
   matrix,
+  productionProjectsMatrix,
 ) {
   if (sheet.getLastRow() < 4 || sheet.getLastColumn() < 4) {
     return false;
   }
   if (
     sheet.getRange('A1').getNote() !==
-    buildAIAnalysisDashboardLayoutNote_(matrix)
+    buildAIAnalysisDashboardLayoutNote_(matrix, productionProjectsMatrix)
   ) {
     return false;
   }
@@ -1301,17 +1691,25 @@ function expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks) {
   return (
     (summary.rows.length > 0 ? 1 : 0) +
     (summary.weeks.length > 0 ? 1 : 0) +
+    (summary.productionProjects.weeks.length > 0 ? 1 : 0) +
     visibleWeeks.length
   );
 }
 
-function buildAIAnalysisDashboardLayoutNote_(matrix) {
+function buildAIAnalysisDashboardLayoutNote_(
+  matrix,
+  productionProjectsMatrix,
+) {
   const weekSignature = matrix.rows.map((row) => row[0]).join('|');
   const categorySignature = matrix.categories.join('|');
+  const projectWeekSignature = productionProjectsMatrix.rows
+    .map((row) => row[0])
+    .join('|');
   return (
     `${AI_ANALYSIS_DASHBOARD_CONFIG.LAYOUT_NOTE}\n` +
     `Weeks: ${weekSignature}\n` +
-    `Categories: ${categorySignature}`
+    `Categories: ${categorySignature}\n` +
+    `Project weeks: ${projectWeekSignature}`
   );
 }
 
@@ -1365,10 +1763,33 @@ function buildAIAnalysisDashboardStats_(summary, weeklyStats, dashboardStats) {
       AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_SERIES_LABEL,
       AI_ANALYSIS_DASHBOARD_CONFIG.OTHER_CATEGORIES_LABEL,
     ],
-    totalCharts:
-      (summary.rows.length > 0 ? 1 : 0) +
-      (summary.weeks.length > 0 ? 1 : 0) +
-      visibleWeeklyCharts,
+    weeklyProductionProjectsChart:
+      summary.productionProjects.weeks.length > 0,
+    weeklyProductionProjectsSourceHeaders: [
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATED_AT_HEADER,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_TOLERANCE_HEADER,
+    ],
+    weeklyProductionProjectsSeries: [
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_INSIDE_RANGE_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_OUTSIDE_RANGE_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_WITHOUT_DATA_LABEL,
+    ],
+    productionProjectHistoricalWeeks:
+      summary.productionProjects.weeks.length,
+    productionProjects: summary.productionProjects.totalProjects,
+    productionProjectsWithCreatedAt:
+      summary.productionProjects.projectsWithCreatedAt,
+    productionProjectsWithoutCreatedAt:
+      summary.productionProjects.projectsWithoutCreatedAt,
+    duplicateProductionProjectRows:
+      summary.productionProjects.duplicateProjectRows,
+    totalCharts: expectedAIAnalysisDashboardChartCount_(
+      summary,
+      summary.weeks.slice(
+        0,
+        AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_LIMIT,
+      ),
+    ),
     weeklyMatrixCategories: getAIWeeklyMatrixCategories_(summary),
     excludedFromWeeklyCount: summary.excludedFromWeeklyCount,
     uncategorizedRows: summary.uncategorizedRows,

@@ -7,8 +7,9 @@ also classifies each archived email and extracts the two tabular datasets from
 Shade Report PDFs through the OpenAI Responses API. Managed `AI Weekly
 Summary` and `AI Dashboard` sheets preserve the weekly Primary Category
 history and display an all-time Primary Category chart, a two-series stacked
-historical chart that detects Production in `Categories`, and the eight most
-recent individual Primary Category weeks. A deterministic `TOF Values
+historical chart that detects Production in `Categories`, a three-series
+weekly project-production chart, and the eight most recent individual Primary
+Category weeks. A deterministic `TOF Values
 Comparison` sheet compares the Aurora PDF tables with the corresponding
 Artemis project tables for each Project ID.
 
@@ -199,12 +200,20 @@ It:
   multi-value `Categories` cell contains the exact Production category, or
   under `Other Categories without Production` otherwise. New and custom
   non-Production categories are included automatically.
-- Displays one all-time chart, one two-series stacked chart covering the
-  complete history, and the eight most recent individual weekly charts, for a
-  maximum of ten charts in `AI Dashboard`.
-- Shows the count inside each segment of the stacked chart, with a descriptive
-  legend for both series. Production labels use a persistent high-contrast
-  cyan color so weekly values remain visible after chart rebuilds.
+- Adds `Weekly Production Projects` from `Project ID Summary`, locating
+  `Created At` and `Is tolerance into the range [-5%, +15%]` by header. Each
+  unique project with a valid creation date is counted once by week as
+  `Production Inside the Range`, `Production Outside the Range`, or `Without
+  Production Data`; the latter includes blank tolerance results. Projects
+  without a valid creation date are reported but cannot be placed in a week.
+- Displays one all-time chart, one two-series email chart, one three-series
+  project chart covering complete history, and the eight most recent
+  individual weekly charts, for a maximum of eleven charts in `AI Dashboard`.
+- Uses light green for projects inside tolerance, light pink for projects
+  outside tolerance, and gray for projects without production data.
+- Shows the count inside each segment of both stacked charts, with descriptive
+  legends. Email Production labels use a persistent high-contrast cyan color;
+  project status labels remain black against the light status colors.
 - Keeps each category in a stable matrix column and chart color. Categories
   outside the configured taxonomy are appended deterministically for review.
 - Keeps weekly chart positions fixed. During a visible week, source-range
@@ -633,17 +642,17 @@ complete function order is:
 | 9 | `testOpenAIConnection()` | `OpenAIAnalysis.gs` | Verify API authentication, model access, and Structured Outputs |
 | 10 | `previewOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Analyze one email without writing the AI Analysis sheet |
 | 11 | `analyzePendingGoodLeapEmailsWithOpenAI()` | `OpenAIAnalysis.gs` | Write the first bounded historical analysis batch; rerun until pending is zero |
-| 12 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create Primary Category summaries plus the Categories-based Production-versus-other history and charts |
-| 13 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
-| 14 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
-| 15 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
-| 16 | `previewOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Extract one complete PDF without writing a row or CSV files |
-| 17 | `extractPendingShadeReportPdfsWithOpenAI()` | `OpenAIPdfExtraction.gs` | Write one bounded historical PDF batch; rerun until pendingPdfs is zero |
-| 18 | `setupPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Upgrade PDF Analysis and validate deterministic solar-table settings |
-| 19 | `testPostHogSolarTableConnection()` | `PostHogSolarTables.gs` | Verify both GoodLeap and Sales project/panel schemas |
-| 20 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
-| 21 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
-| 22 | `setupProjectIdSummary()` | `ProjectIdSummary.gs` | Create the project-level rollup and backfill map source metadata |
+| 12 | `setupProjectIdSummary()` | `ProjectIdSummary.gs` | Create the project-level rollup required by the weekly project-production summary |
+| 13 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create Primary Category, email-production, and project-production weekly summaries and charts |
+| 14 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
+| 15 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
+| 16 | `previewShadeReportPdfCandidates()` | `OpenAIPdfExtraction.gs` | Review selected source PDFs and suppressed duplicates without an API call |
+| 17 | `previewOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Extract one complete PDF without writing a row or CSV files |
+| 18 | `extractPendingShadeReportPdfsWithOpenAI()` | `OpenAIPdfExtraction.gs` | Write one bounded historical PDF batch; rerun until pendingPdfs is zero |
+| 19 | `setupPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Upgrade PDF Analysis and validate deterministic solar-table settings |
+| 20 | `testPostHogSolarTableConnection()` | `PostHogSolarTables.gs` | Verify both GoodLeap and Sales project/panel schemas |
+| 21 | `previewPostHogSolarTableSync()` | `PostHogSolarTables.gs` | Preview source and array counts without writing files |
+| 22 | `syncPostHogSolarTables()` | `PostHogSolarTables.gs` | Generate the first historical project-side CSV files |
 | 23 | `previewTOFValuesComparison()` | `TOFValuesComparison.gs` | Preview deterministic Aurora-versus-Artemis matching without writing the comparison sheet |
 | 24 | `setupTOFValuesComparison()` | `TOFValuesComparison.gs` | Create and format the managed comparison sheet |
 | 25 | `syncPendingTOFValuesComparisons()` | `TOFValuesComparison.gs` | Process one bounded historical comparison batch; rerun until pendingProjects is zero |
@@ -819,13 +828,16 @@ Before installing the schedule, initialize and validate OpenAI:
    log reports `pendingMessages: 0`.
 7. Investigate every row marked `Error`. After correcting the cause, run
    `retryFailedOpenAIEmailAnalyses()` to retry only failed rows.
-8. Open `AIAnalysisDashboard.gs`, run `previewAIAnalysisDashboard()`, and
-   confirm that the logged all-time and weekly counts match `AI Analysis`.
-9. Run `setupAIAnalysisDashboard()` and confirm that `AI Weekly Summary`
+8. Open `ProjectIdSummary.gs` and run `setupProjectIdSummary()` so the
+   project creation dates and tolerance statuses are available.
+9. Open `AIAnalysisDashboard.gs`, run `previewAIAnalysisDashboard()`, and
+   confirm that the logged all-time and weekly counts match `AI Analysis` and
+   the weekly project counts reconcile with `Project ID Summary`.
+10. Run `setupAIAnalysisDashboard()` and confirm that `AI Weekly Summary`
    contains the long weekly history, detailed Primary Category matrix, and
-   Categories-based Production-versus-other matrix. Confirm that `AI Dashboard`
-   contains one all-time chart, one two-series stacked historical chart, and up
-   to eight weekly charts, newest first.
+   both Production matrices. Confirm that `AI Dashboard` contains one all-time
+   chart, the two-series email chart, the three-series project chart, and up to
+   eight weekly charts, newest first.
 
 Next, initialize and validate Shade Report extraction:
 
@@ -918,22 +930,24 @@ No new Script Property or trigger is required.
 
 1. Create or replace `AIAnalysisDashboard.gs` in the same Apps Script project
    with the repository version.
-2. Confirm that `OpenAIAnalysis.gs` already calls
-   `refreshAIAnalysisDashboardSafely_()` after each analysis batch. Replace it
-   with the repository version only when upgrading from an older installation.
+2. Replace `OpenAIAnalysis.gs` and `PostHogSync.gs` with the repository
+   versions so `Project ID Summary` refreshes before the dashboard and PostHog
+   project updates also refresh the weekly project chart.
 3. Save the Apps Script project.
-4. Open `AIAnalysisDashboard.gs` and run `previewAIAnalysisDashboard()`.
-   Confirm the logged all-time and weekly category counts.
-5. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Weekly Summary`
+4. Run `setupProjectIdSummary()` first and confirm that `Created At` and `Is
+   tolerance into the range [-5%, +15%]` are populated as expected.
+5. Open `AIAnalysisDashboard.gs` and run `previewAIAnalysisDashboard()`.
+   Confirm the logged all-time, weekly category, and weekly project counts.
+6. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Weekly Summary`
    contains every historical week in long and wide formats, including the
-   Production-versus-other matrix. Confirm that `AI Dashboard` contains the
-   all-time chart, the two-series stacked historical chart, and up to eight
-   weekly charts, newest first.
-6. Optionally delete the manually created `Temporal` sheet after validation;
+   Production-versus-other and `Weekly Production Projects` matrices. Confirm
+   that `AI Dashboard` contains the all-time chart, both stacked historical
+   charts, and up to eight weekly charts, newest first.
+7. Optionally delete the manually created `Temporal` sheet after validation;
    the managed dashboard does not read or modify it.
-7. Do not reinstall or manually edit triggers. The existing five-minute
+8. Do not reinstall or manually edit triggers. The existing five-minute
    coordinator reaches the refresh through `OpenAIAnalysis.gs`.
-8. To rebuild the dashboard manually later, run
+9. To rebuild the dashboard manually later, run
    `refreshAIAnalysisDashboard()`.
 
 ### Adding Project ID Summary to an existing installation
@@ -981,8 +995,9 @@ No new Script Property or trigger is required.
    Hawaii, and Puerto Rico rather than the four continental regions.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
-8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
-   with the persistent visible Production data-label color.
+8. Run `refreshAIAnalysisDashboard()` once to rebuild both weekly stacked
+   charts, including the project-production chart sourced from `Created At`
+   and the tolerance status.
 9. Do not reinstall or edit triggers. The current five-minute and hourly
    workflows discover the new summary functions from the shared Apps Script
    runtime.
@@ -1265,8 +1280,10 @@ stop all PostHog calls while keeping Gmail automation, run
   reporting sheets. `AI Weekly Summary` keeps the complete Primary Category
   history and classifies each valid weekly row as Production or Other
   Categories by inspecting the multi-value `Categories` field. That two-series
-  range drives the stacked historical chart. `AI Dashboard` shows one all-time,
-  one stacked-history, and up to eight recent weekly charts.
+  range drives the stacked email chart. It also groups unique projects by
+  `Created At` and classifies their tolerance status as inside, outside, or
+  without production data. `AI Dashboard` shows one all-time, two stacked-
+  history, and up to eight recent weekly charts.
   Existing chart objects remain in place while only counts change within the
   same visible weeks.
 - `ProjectIdSummary.gs` maintains one row per resolved project with its
@@ -1327,10 +1344,12 @@ The deployment is ready only when all of the following are true:
   Gmail Message ID, with no unexplained `Error` rows.
 - `AI Weekly Summary` contains all Monday-to-Sunday category aggregates in
   long and wide formats. Each detailed row and each Categories-based
-  Production-versus-other row sums to its weekly total.
-- `AI Dashboard` shows no more than ten charts: one all-time, one stacked
-  historical Production-versus-other comparison, and eight individual weekly
-  charts.
+  Production-versus-other row sums to its weekly total. `Weekly Production
+  Projects` also reconciles every unique project with a valid `Created At` to
+  the inside-range, outside-range, or without-production-data series and total.
+- `AI Dashboard` shows no more than eleven charts: one all-time, one stacked
+  historical Production-versus-other email comparison, one stacked weekly
+  project-production comparison, and eight individual weekly charts.
 - `testOpenAIPdfConnection()` passes and does not expose the API key.
 - `previewOpenAIPdfExtraction()` returns all visible Array IDs for a verified
   Shade Report.
@@ -1397,7 +1416,8 @@ new source record can remain temporarily unavailable in PostHog.
 7. Run the PostHog setup, connection test, preview, and first synchronization.
 8. Run the OpenAI email setup, connection test, preview, and bounded historical
    analysis.
-9. Run the AI Dashboard preview and setup functions.
+9. Run `setupProjectIdSummary()`, followed by the AI Dashboard preview and
+   setup functions.
 10. Run the OpenAI PDF setup, connection test, candidate preview, extraction
    preview, and bounded historical extraction. Review both generated CSVs.
 11. Run the PostHog solar-table setup, connection test, preview, and historical

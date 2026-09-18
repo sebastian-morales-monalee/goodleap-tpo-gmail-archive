@@ -687,6 +687,13 @@ function syncPostHogProjects() {
       );
     }
     SpreadsheetApp.flush();
+    if (
+      typeof refreshAIAnalysisDashboardSafely_ === 'function' &&
+      resources.spreadsheet.getSheetByName('AI Analysis')
+    ) {
+      stats.dashboard = refreshAIAnalysisDashboardSafely_();
+    }
+    SpreadsheetApp.flush();
 
     console.log(JSON.stringify(stats, null, 2));
     console.log(`Spreadsheet: ${resources.spreadsheet.getUrl()}`);
@@ -719,6 +726,13 @@ function syncProjectIdsToAnalysisSheets() {
         resources.spreadsheet,
         {refreshMapData: true},
       );
+    }
+    SpreadsheetApp.flush();
+    if (
+      typeof refreshAIAnalysisDashboardSafely_ === 'function' &&
+      resources.spreadsheet.getSheetByName('AI Analysis')
+    ) {
+      stats.dashboard = refreshAIAnalysisDashboardSafely_();
     }
     SpreadsheetApp.flush();
     console.log(JSON.stringify(stats, null, 2));
