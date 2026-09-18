@@ -211,8 +211,11 @@ It:
   value. Projects without a valid update date are reported but cannot be
   placed in a week.
 - Displays one all-time chart, one two-series email chart, two three-series
-  project charts covering complete history, and the eight most recent
-  individual weekly charts, for a maximum of twelve charts in `AI Dashboard`.
+  project charts covering complete history, and—only when
+  `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` is `true`—the eight most recent
+  individual weekly charts and their supporting tables. The option defaults to
+  `false`, leaving only the four consolidated charts visible and clearing the
+  detailed blocks from row 32 downward.
 - Uses light green for projects inside tolerance, light pink for projects
   outside tolerance, and gray for projects without production data.
 - Shows the count inside each segment of all three stacked charts, with
@@ -221,9 +224,9 @@ It:
   colors.
 - Keeps each category in a stable matrix column and chart color. Categories
   outside the configured taxonomy are appended deterministically for review.
-- Keeps weekly chart positions fixed. During a visible week, source-range
-  values change without rebuilding charts; chart objects are recreated only
-  when the visible set of weeks or the managed layout changes.
+- Keeps optional weekly chart positions fixed. During a visible week,
+  source-range values change without rebuilding charts; chart objects are
+  recreated only when the visible set of weeks or the managed layout changes.
 - Records categorized rows with missing or invalid received dates in the
   all-time total and reports how many were excluded from weekly aggregation.
 - Does not call OpenAI, Gmail, Drive, or PostHog.
@@ -841,8 +844,8 @@ Before installing the schedule, initialize and validate OpenAI:
 10. Run `setupAIAnalysisDashboard()` and confirm that `AI Weekly Summary`
    contains the long weekly history, detailed Primary Category matrix, and
    all three Production matrices. Confirm that `AI Dashboard` contains one
-   all-time chart, the two-series email chart, both three-series project
-   charts, and up to eight weekly charts, newest first.
+   all-time chart, the two-series email chart, and both three-series project
+   charts. The detailed weekly tables and charts remain disabled by default.
 
 Next, initialize and validate Shade Report extraction:
 
@@ -948,8 +951,9 @@ No new Script Property or trigger is required.
    contains every historical week in long and wide formats, including the
    Production-versus-other, `Weekly Production Projects`, and `Weekly
    Production Updated Projects` matrices. Confirm that `AI Dashboard` contains
-   the all-time chart, all three stacked historical charts, and up to eight
-   weekly charts, newest first.
+   the all-time chart and all three stacked historical charts. The detailed
+   weekly tables and charts remain disabled by default. To restore them, set
+   `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` to `true` and rerun the setup.
 7. Optionally delete the manually created `Temporal` sheet after validation;
    the managed dashboard does not read or modify it.
 8. Do not reinstall or manually edit triggers. The existing five-minute
@@ -1289,8 +1293,9 @@ stop all PostHog calls while keeping Gmail automation, run
   Categories by inspecting the multi-value `Categories` field. That two-series
   range drives the stacked email chart. It also classifies unique projects as
   inside, outside, or without production data and groups them independently
-  by `Created At` and `Updated At`. `AI Dashboard` shows one all-time, three
-  stacked-history, and up to eight recent weekly charts.
+  by `Created At` and `Updated At`. `AI Dashboard` shows one all-time and three
+  stacked-history charts by default. Up to eight recent weekly detail charts
+  appear only when `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` is enabled.
   Existing chart objects remain in place while only counts change within the
   same visible weeks.
 - `ProjectIdSummary.gs` maintains one row per resolved project with its
@@ -1356,9 +1361,11 @@ The deployment is ready only when all of the following are true:
   `Weekly Production Updated Projects` does the same using `Updated At`; both
   reconcile to the inside-range, outside-range, or without-production-data
   series and total.
-- `AI Dashboard` shows no more than twelve charts: one all-time, one stacked
-  historical Production-versus-other email comparison, two stacked weekly
-  project-production comparisons, and eight individual weekly charts.
+- `AI Dashboard` shows four consolidated charts by default: one all-time, one
+  stacked historical Production-versus-other email comparison, and two stacked
+  weekly project-production comparisons. Enabling
+  `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` adds up to eight individual weekly
+  charts, for a maximum of twelve.
 - `testOpenAIPdfConnection()` passes and does not expose the API key.
 - `previewOpenAIPdfExtraction()` returns all visible Array IDs for a verified
   Shade Report.
