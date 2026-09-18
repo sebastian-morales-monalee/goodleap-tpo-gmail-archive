@@ -230,9 +230,12 @@ It:
 
 - Creates and maintains `Project ID Summary` with one row per resolved Project
   ID from `PostHog Projects`.
-- Copies the authoritative Project URL instead of constructing it, preserving
-  the correct GoodLeap or Artemis Sales domain.
-- Enriches columns C:I from PostHog with Address, State, Region, Solar Panel,
+- Inserts `Application ID` in column B and combines every unique Application ID
+  associated with the Project ID in `PostHog Projects` or `PDF Analysis`.
+  Projects with multiple values show them in one cell separated by semicolons.
+- Copies the authoritative Project URL into column C instead of constructing
+  it, preserving the correct GoodLeap or Artemis Sales domain.
+- Enriches columns D:J from PostHog with Address, State, Region, Solar Panel,
   Inverter, Installer, and Team Name. GoodLeap is queried first and Artemis
   Sales is used only when the Project ID is not found in GoodLeap. Address and
   State fall back to the related property record; Installer is resolved through
@@ -245,20 +248,20 @@ It:
 - Selects the matching `AI Analysis` row with the most recent valid `Email
   Received At` value, using the last sheet occurrence to break exact timestamp
   ties. It copies that row's `Gmail Message ID`, `Required Evidence`, `Technical
-  Notes`, and `AI Summary` into Q:T, plus `Email Received At`, `Proposed
-  Production kWh`, `Benchmark Production kWh`, and `Tolerance %` into U:X.
+  Notes`, and `AI Summary` into R:U, plus `Email Received At`, `Proposed
+  Production kWh`, `Benchmark Production kWh`, and `Tolerance %` into V:Y.
 - Assigns each project to `Production with other categories` when at least one
   of its categorized emails contains the exact `Production` value in
   `Categories`; otherwise it uses `Other Categories without Production`.
   Projects without a categorized email remain blank. The group occupies column
-  Y, immediately before the Shade Report Delta columns.
+  Z, immediately before the Shade Report Delta columns.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
 - Queries map metadata in batches only for new projects or rows whose map
   metadata is still incomplete. Previous successful values survive temporary
   PostHog errors.
-- Omits Application ID and Organization from the reader-facing output.
+- Omits Organization from the reader-facing output.
 - Copies Delta Panel Count, aggregate Azimuth and Pitch deltas, annual TOF,
   Solar Access, TSRF, and Jan-Dec deltas from each project's `Recalculated
   Weighted Average` row in `Shade Reports Comparison`.
@@ -266,7 +269,7 @@ It:
   `last_status_updated_at`, and `design_updated_at` from the GoodLeap projects
   table, with Artemis Sales as fallback. The corresponding `Engine Version`,
   `Created At`, `Updated At`, `Last Status Updated At`, and `Design Updated At`
-  columns occupy AU:AY and retain prior successful values after temporary
+  columns occupy AV:AZ and retain prior successful values after temporary
   PostHog query failures.
 - Sorts projects by Email Count and then by the most recent email.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
@@ -927,8 +930,9 @@ No new Script Property or trigger is required.
 
 No new Script Property or trigger is required.
 
-1. Replace `ProjectIdSummary.gs`, `TOFValuesComparison.gs`, `PostHogSync.gs`,
-   and `AIAnalysisDashboard.gs` with the repository versions.
+1. Replace `ProjectIdSummary.gs` with the repository version. If the earlier
+   Project ID Summary upgrades are not installed yet, also update
+   `TOFValuesComparison.gs`, `PostHogSync.gs`, and `AIAnalysisDashboard.gs`.
 2. Keep the existing `OpenAIAnalysis.gs` and `OpenAIPdfExtraction.gs`; their
    safe summary refresh calls remain compatible with the new columns.
 3. Save the Apps Script project.
@@ -939,8 +943,10 @@ No new Script Property or trigger is required.
    engine version, and project dates. The preview does not write the sheet.
 5. Run `previewProjectIdSummary()`. Confirm that the logged unique-project,
    email-row, and PDF-row totals match the source sheets.
-6. Run `setupProjectIdSummary()` once. It safely inserts Address, State, Region,
-   Solar Panel, Inverter, Installer, and Team Name after Project URL; creates the
+6. Run `setupProjectIdSummary()` once. It safely inserts Application ID after
+   Project ID; moves Project URL and every following column right; inserts
+   Address, State, Region, Solar Panel, Inverter, Installer, and Team Name after
+   Project URL; creates the
    `US State Regions` reference; and preserves all existing values while moving
    them right. It also appends `Map Data Source`, `RGB Basemap URL`, the latest
    Gmail context and AI production values,
@@ -948,10 +954,12 @@ No new Script Property or trigger is required.
    `Absolute Delta Azimuth`, `Absolute Delta Pitch`, `Absolute Azimuth + Pitch`,
    `Engine Version`, `Created At`, `Updated At`, `Last Status Updated At`, and
    `Design Updated At` to legacy layouts and backfills historical projects.
-   Confirm that RGB URLs are clickable, the group matches the `Categories`
-   values in `AI Analysis`, every latest AI field comes from the same newest
-   matching email, Delta values match the `Recalculated Weighted Average` rows
-   in `Shade Reports Comparison`, the three absolute metrics are calculated,
+   Confirm that column B contains every unique Application ID for the project
+   (semicolon-separated when there are several), RGB URLs are clickable, the
+   group matches the `Categories` values in `AI Analysis`, every latest AI field
+   comes from the same newest matching email, Delta values match the
+   `Recalculated Weighted Average` rows in `Shade Reports Comparison`, the three
+   absolute metrics are calculated,
    the project metadata matches PostHog, and AK, HI, and PR map to Alaska,
    Hawaii, and Puerto Rico rather than the four continental regions.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
@@ -1318,19 +1326,20 @@ The deployment is ready only when all of the following are true:
   the values equal the non-weighted rows in the corresponding Summary CSVs.
 - `AI Analysis` and `PDF Analysis` contain the same Project ID shown for their
   Application ID in `PostHog Projects`, or remain blank when it is `Not Found`.
-- `Project ID Summary` contains one row per resolved Project ID, uses the URL
-  from `PostHog Projects`, shows Address, State, Region, Solar Panel, Inverter,
-  Installer, and Team Name in C:I, and reconciles its email and PDF counts with the two
+- `Project ID Summary` contains one row per resolved Project ID, lists all unique
+  Application IDs in B, uses the URL from `PostHog Projects` in C, shows
+  Address, State, Region, Solar Panel, Inverter, Installer, and Team Name in
+  D:J, and reconciles its email and PDF counts with the two
   analysis sheets, and shows the PostHog map source plus a clickable RGB
   basemap URL when available. Its `Production Category Group` uses the same
   exact `Categories`-based Production rule as the weekly dashboard. Its Delta
   columns reproduce each project's `Recalculated Weighted Average` values from
-  `Shade Reports Comparison`. Columns Q:T reproduce the Gmail Message ID and
-  three contextual AI fields, while U:X reproduce the date and three production
+  `Shade Reports Comparison`. Columns R:U reproduce the Gmail Message ID and
+  three contextual AI fields, while V:Y reproduce the date and three production
   values from the same newest matching `AI Analysis` row. `Production Category
-  Group` occupies Y. The three
+  Group` occupies Z. The three
   highlighted absolute columns show the absolute Azimuth Delta, absolute Pitch
-  Delta, and their sum. Columns AU:AY show the project engine version and four
+  Delta, and their sum. Columns AV:AZ show the project engine version and four
   project lifecycle timestamps from the GoodLeap or Artemis Sales project
   record. `US State Regions` contains the static regional association, with
   Alaska, Hawaii, and Puerto Rico represented as separate regions.

@@ -176,11 +176,20 @@ const PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS = [
   'Team Name',
 ];
 
-const PROJECT_ID_SUMMARY_BASE_HEADERS =
+const LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_V9 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(0, 2).concat(
     PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS,
     LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(2),
   );
+
+const PROJECT_ID_SUMMARY_BASE_HEADERS = [
+  'Project ID',
+  'Application ID',
+  'Project URL',
+].concat(
+  PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS,
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(2),
+);
 
 const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
@@ -252,6 +261,14 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8 =
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V9 =
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_V9.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    ['Production Category Group'],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
   PROJECT_ID_SUMMARY_BASE_HEADERS.length;
 const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
@@ -267,6 +284,10 @@ const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
   PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
 const PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX =
   PROJECT_ID_SUMMARY_HEADERS.indexOf('Email Count');
+const PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Application ID');
+const PROJECT_ID_SUMMARY_PROJECT_URL_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Project URL');
 const PROJECT_ID_SUMMARY_LAST_EMAIL_INDEX =
   PROJECT_ID_SUMMARY_HEADERS.indexOf('Last Email Received At');
 const PROJECT_ID_SUMMARY_MAP_DATA_SOURCE_INDEX =
@@ -309,6 +330,9 @@ function previewProjectIdSummaryPostHogData() {
     const metadata = metadataLookup.byProjectId.get(project.key) || {};
     return {
       projectId: project.projectId,
+      applicationId: formatProjectIdSummaryApplicationIds_(
+        project.applicationIds,
+      ),
       mapLookupSource: mapData.lookupSource || '',
       mapDataSource: mapData.mapDataSource || '',
       rgbBasemapUrl: mapData.rgbBasemapUrl || '',
@@ -358,7 +382,8 @@ function previewProjectIdSummary() {
   const result = buildProjectIdSummaryStats_(summary);
   result.preview = summary.rows.slice(0, 10).map((row) => ({
     projectId: row[0],
-    projectUrl: row[1],
+    applicationId: row[PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX] || '',
+    projectUrl: row[PROJECT_ID_SUMMARY_PROJECT_URL_INDEX] || '',
     address: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Address')] || '',
     state: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('State')] || '',
     region: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Region')] || '',
@@ -489,6 +514,8 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
 
 function buildProjectIdSummary_(spreadsheet, options) {
   const projects = loadProjectIdSummaryBaseProjects_(spreadsheet);
+  const pdfApplicationIds =
+    loadProjectIdSummaryPdfApplicationIds_(spreadsheet);
   const emailMetrics = loadProjectIdSummaryEmailMetrics_(spreadsheet);
   const pdfCounts = loadProjectIdSummaryProjectCounts_(
     spreadsheet,
@@ -544,8 +571,15 @@ function buildProjectIdSummary_(spreadsheet, options) {
       latestTolerancePercent: '',
     };
     const pdfCount = pdfCounts.get(project.key) || 0;
+    const applicationIds = new Set(project.applicationIds);
+    const pdfProjectApplicationIds = pdfApplicationIds.get(project.key);
+    if (pdfProjectApplicationIds) {
+      pdfProjectApplicationIds.forEach((applicationId) => {
+        applicationIds.add(applicationId);
+      });
+    }
     let attachmentCount = 0;
-    project.applicationIds.forEach((applicationId) => {
+    applicationIds.forEach((applicationId) => {
       attachmentCount += attachmentCounts.get(applicationId) || 0;
     });
 
@@ -567,6 +601,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
 
     rows.push([
       project.projectId,
+      formatProjectIdSummaryApplicationIds_(applicationIds),
       project.projectUrl,
       projectMetadata.address || '',
       projectMetadata.state || '',
@@ -645,6 +680,14 @@ function buildProjectIdSummary_(spreadsheet, options) {
 function buildProjectIdSummaryStats_(summary) {
   return {
     uniqueProjects: summary.rows.length,
+    projectsWithApplicationIds: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX],
+    ).length,
+    projectsWithMultipleApplicationIds: summary.rows.filter(
+      (row) => splitProjectIdSummaryApplicationIds_(
+        row[PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX],
+      ).length > 1,
+    ).length,
     emailRowsWithProjectId: summary.emailRowsWithProjectId,
     categorizedEmailRowsWithProjectId:
       summary.categorizedEmailRowsWithProjectId,
@@ -1241,7 +1284,9 @@ function loadProjectIdSummaryBaseProjects_(spreadsheet) {
   const projectsById = new Map();
 
   values.slice(1).forEach((row) => {
-    const applicationId = String(row[applicationIdIndex] || '').trim();
+    const applicationIds = splitProjectIdSummaryApplicationIds_(
+      row[applicationIdIndex],
+    );
     const projectIds = splitProjectIdSummaryIds_(row[projectIdIndex]);
     const projectUrls = splitProjectIdSummaryLines_(row[projectUrlIndex]);
 
@@ -1263,11 +1308,55 @@ function loadProjectIdSummaryBaseProjects_(spreadsheet) {
       } else if (!project.projectUrl && projectUrl) {
         project.projectUrl = projectUrl;
       }
-      if (applicationId) project.applicationIds.add(applicationId);
+      applicationIds.forEach((applicationId) => {
+        project.applicationIds.add(applicationId);
+      });
     });
   });
 
   return Array.from(projectsById.values());
+}
+
+function loadProjectIdSummaryPdfApplicationIds_(spreadsheet) {
+  const byProjectId = new Map();
+  const sheet = spreadsheet.getSheetByName(
+    PROJECT_ID_SUMMARY_CONFIG.PDF_SHEET_NAME,
+  );
+  if (!sheet || sheet.getLastRow() < 2) return byProjectId;
+
+  const values = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getDisplayValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const projectIdIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Project ID',
+    sheet.getName(),
+  );
+  const applicationIdIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Application ID',
+    sheet.getName(),
+  );
+
+  values.slice(1).forEach((row) => {
+    const projectIds = splitProjectIdSummaryIds_(row[projectIdIndex]);
+    const applicationIds = splitProjectIdSummaryApplicationIds_(
+      row[applicationIdIndex],
+    );
+    if (projectIds.length === 0 || applicationIds.length === 0) return;
+
+    projectIds.forEach((projectId) => {
+      const key = projectId.toLowerCase();
+      if (!byProjectId.has(key)) byProjectId.set(key, new Set());
+      const projectApplicationIds = byProjectId.get(key);
+      applicationIds.forEach((applicationId) => {
+        projectApplicationIds.add(applicationId);
+      });
+    });
+  });
+
+  return byProjectId;
 }
 
 function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
@@ -1713,6 +1802,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V9,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -1833,9 +1926,23 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8,
     );
     console.log(
-      'Project ID Summary schema upgraded: Address, State, Region, Solar Panel, ' +
-      'Inverter, Installer, and Team Name were inserted after Project URL. ' +
+      'Project ID Summary schema upgraded: Application ID, Address, State, ' +
+      'Region, Solar Panel, Inverter, Installer, and Team Name were inserted. ' +
       'Existing values were shifted safely.',
+    );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V9,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V9,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: Application ID was inserted after ' +
+      'Project ID. Existing columns and values were shifted safely.',
     );
   }
 
@@ -1873,8 +1980,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     );
   sheet.setFrozenRows(1);
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
-  sheet.setColumnWidth(1, 280);
-  sheet.setColumnWidth(2, 520);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Project ID'), 280);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Application ID'), 220);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Project URL'), 520);
   sheet.setColumnWidth(projectIdSummaryColumn_('Address'), 300);
   sheet.setColumnWidth(projectIdSummaryColumn_('State'), 90);
   sheet.setColumnWidth(projectIdSummaryColumn_('Region'), 120);
@@ -2016,7 +2124,15 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       2,
     )
     .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
-  sheet.getRange(startRow, 1, rowCount, 2).setWrap(false);
+  sheet
+    .getRange(
+      startRow,
+      projectIdSummaryColumn_('Project ID'),
+      rowCount,
+      3,
+    )
+    .setNumberFormat('@')
+    .setWrap(false);
   sheet
     .getRange(
       startRow,
@@ -2160,12 +2276,21 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
 
 function setProjectIdSummaryRichLinks_(sheet, rows) {
   const richUrls = rows.map((row) => {
-    const url = String(row[1] || '').trim();
+    const url = String(
+      row[PROJECT_ID_SUMMARY_PROJECT_URL_INDEX] || '',
+    ).trim();
     const builder = SpreadsheetApp.newRichTextValue().setText(url);
     if (url) builder.setLinkUrl(url);
     return [builder.build()];
   });
-  sheet.getRange(2, 2, rows.length, 1).setRichTextValues(richUrls);
+  sheet
+    .getRange(
+      2,
+      PROJECT_ID_SUMMARY_PROJECT_URL_INDEX + 1,
+      rows.length,
+      1,
+    )
+    .setRichTextValues(richUrls);
 
   const richBasemapUrls = rows.map((row) => {
     const url = safeProjectIdSummaryUrl_(
@@ -2247,6 +2372,24 @@ function splitProjectIdSummaryIds_(value) {
     }
   });
   return Array.from(unique);
+}
+
+function splitProjectIdSummaryApplicationIds_(value) {
+  return String(value || '')
+    .split(/[;\r\n,]+/)
+    .map((applicationId) => applicationId.trim())
+    .filter(Boolean);
+}
+
+function formatProjectIdSummaryApplicationIds_(applicationIds) {
+  const unique = new Set();
+  Array.from(applicationIds || []).forEach((applicationId) => {
+    const normalized = String(applicationId || '').trim();
+    if (normalized) unique.add(normalized);
+  });
+  return Array.from(unique)
+    .sort((left, right) => left.localeCompare(right))
+    .join('; ');
 }
 
 function isProjectIdSummaryUuid_(value) {
