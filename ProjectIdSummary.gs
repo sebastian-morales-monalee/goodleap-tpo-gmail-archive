@@ -15,6 +15,7 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   PDF_SHEET_NAME: 'PDF Analysis',
   ATTACHMENTS_SHEET_NAME: 'Attachments',
   COMPARISON_SHEET_NAME: 'Shade Reports Comparison',
+  STATE_REGIONS_SHEET_NAME: 'US State Regions',
   COMPARISON_MATCH_TYPE: 'Recalculated Weighted Average',
   HEADER_BACKGROUND: '#7200c9',
   HEADER_FONT_COLOR: '#ffffff',
@@ -39,6 +40,61 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   PROJECT_LAST_STATUS_UPDATED_AT_FIELD: 'last_status_updated_at',
   PROJECT_DESIGN_UPDATED_AT_FIELD: 'design_updated_at',
 };
+
+const PROJECT_ID_SUMMARY_STATE_REGIONS = [
+  ['AL', 'South'],
+  ['AK', 'Alaska'],
+  ['AZ', 'West'],
+  ['AR', 'South'],
+  ['CA', 'West'],
+  ['CO', 'West'],
+  ['CT', 'Northeast'],
+  ['DE', 'South'],
+  ['DC', 'South'],
+  ['FL', 'South'],
+  ['GA', 'South'],
+  ['HI', 'Hawaii'],
+  ['ID', 'West'],
+  ['IL', 'Midwest'],
+  ['IN', 'Midwest'],
+  ['IA', 'Midwest'],
+  ['KS', 'Midwest'],
+  ['KY', 'South'],
+  ['LA', 'South'],
+  ['ME', 'Northeast'],
+  ['MD', 'South'],
+  ['MA', 'Northeast'],
+  ['MI', 'Midwest'],
+  ['MN', 'Midwest'],
+  ['MS', 'South'],
+  ['MO', 'Midwest'],
+  ['MT', 'West'],
+  ['NE', 'Midwest'],
+  ['NV', 'West'],
+  ['NH', 'Northeast'],
+  ['NJ', 'Northeast'],
+  ['NM', 'West'],
+  ['NY', 'Northeast'],
+  ['NC', 'South'],
+  ['ND', 'Midwest'],
+  ['OH', 'Midwest'],
+  ['OK', 'South'],
+  ['OR', 'West'],
+  ['PA', 'Northeast'],
+  ['PR', 'Puerto Rico'],
+  ['RI', 'Northeast'],
+  ['SC', 'South'],
+  ['SD', 'Midwest'],
+  ['TN', 'South'],
+  ['TX', 'South'],
+  ['UT', 'West'],
+  ['VT', 'Northeast'],
+  ['VA', 'South'],
+  ['WA', 'West'],
+  ['WV', 'South'],
+  ['WI', 'Midwest'],
+  ['WY', 'West'],
+];
 
 const PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS = [
   'Delta Panel Count',
@@ -98,7 +154,7 @@ const PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS = [
   'AI Summary',
 ];
 
-const PROJECT_ID_SUMMARY_BASE_HEADERS = [
+const LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS = [
   'Project ID',
   'Project URL',
   'Email Count',
@@ -109,6 +165,22 @@ const PROJECT_ID_SUMMARY_BASE_HEADERS = [
   'Map Data Source',
   'RGB Basemap URL',
 ];
+
+const PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS = [
+  'Address',
+  'State',
+  'Region',
+  'Solar Panel',
+  'Inverter',
+  'Installer',
+  'Team Name',
+];
+
+const PROJECT_ID_SUMMARY_BASE_HEADERS =
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(0, 2).concat(
+    PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS,
+    LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(2),
+  );
 
 const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
@@ -172,6 +244,14 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V7 =
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8 =
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    ['Production Category Group'],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
   PROJECT_ID_SUMMARY_BASE_HEADERS.length;
 const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
@@ -185,6 +265,14 @@ const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
   PROJECT_ID_SUMMARY_DELTA_START_INDEX +
   PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
+const PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Email Count');
+const PROJECT_ID_SUMMARY_LAST_EMAIL_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Last Email Received At');
+const PROJECT_ID_SUMMARY_MAP_DATA_SOURCE_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Map Data Source');
+const PROJECT_ID_SUMMARY_RGB_BASEMAP_URL_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('RGB Basemap URL');
 
 /**
  * Creates or upgrades Project ID Summary and immediately populates it.
@@ -225,6 +313,16 @@ function previewProjectIdSummaryPostHogData() {
       mapDataSource: mapData.mapDataSource || '',
       rgbBasemapUrl: mapData.rgbBasemapUrl || '',
       projectLookupSource: metadata.lookupSource || '',
+      address: metadata.address || '',
+      state: metadata.state || '',
+      region: getProjectIdSummaryRegion_(
+        metadata.state,
+        buildDefaultProjectIdSummaryStateRegionLookup_(),
+      ),
+      solarPanel: metadata.solarPanel || '',
+      inverter: metadata.inverter || '',
+      installer: metadata.installer || '',
+      teamName: metadata.teamName || '',
       engineVersion: metadata.engineVersion || '',
       createdAt: metadata.createdAt || '',
       updatedAt: metadata.updatedAt || '',
@@ -261,13 +359,23 @@ function previewProjectIdSummary() {
   result.preview = summary.rows.slice(0, 10).map((row) => ({
     projectId: row[0],
     projectUrl: row[1],
-    emailCount: row[2],
-    attachmentCount: row[3],
-    analyzedPdfCount: row[4],
-    firstEmailReceivedAt: row[5] || '',
-    lastEmailReceivedAt: row[6] || '',
-    mapDataSource: row[7] || '',
-    rgbBasemapUrl: row[8] || '',
+    address: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Address')] || '',
+    state: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('State')] || '',
+    region: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Region')] || '',
+    solarPanel: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Solar Panel')] || '',
+    inverter: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Inverter')] || '',
+    installer: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Installer')] || '',
+    teamName: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Team Name')] || '',
+    emailCount: row[PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX],
+    attachmentCount:
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Attachment Count')],
+    analyzedPdfCount:
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Analyzed PDF Count')],
+    firstEmailReceivedAt:
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('First Email Received At')] || '',
+    lastEmailReceivedAt: row[PROJECT_ID_SUMMARY_LAST_EMAIL_INDEX] || '',
+    mapDataSource: row[PROJECT_ID_SUMMARY_MAP_DATA_SOURCE_INDEX] || '',
+    rgbBasemapUrl: row[PROJECT_ID_SUMMARY_RGB_BASEMAP_URL_INDEX] || '',
     gmailMessageId:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX] || '',
     requiredEvidence:
@@ -347,6 +455,10 @@ function refreshProjectIdSummarySafely_(spreadsheet, options) {
 }
 
 function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
+  const stateRegionsSheet =
+    getOrCreateProjectIdSummaryStateRegionsSheet_(spreadsheet);
+  const stateRegionLookup =
+    loadProjectIdSummaryStateRegionLookup_(stateRegionsSheet);
   const sheet = getOrCreateProjectIdSummarySheet_(spreadsheet);
   const existingMapData = loadExistingProjectIdSummaryMapData_(sheet);
   const existingProjectMetadata =
@@ -355,6 +467,7 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
     refreshMapData: Boolean(options && options.refreshMapData),
     existingMapData,
     existingProjectMetadata,
+    stateRegionLookup,
   });
   const existingRows = loadExistingProjectIdSummaryRows_(sheet);
   const unchanged = projectIdSummaryRowsEqual_(existingRows, summary.rows);
@@ -389,6 +502,9 @@ function buildProjectIdSummary_(spreadsheet, options) {
   const existingProjectMetadata = options && options.existingProjectMetadata
     ? options.existingProjectMetadata
     : new Map();
+  const stateRegionLookup = options && options.stateRegionLookup
+    ? options.stateRegionLookup
+    : buildDefaultProjectIdSummaryStateRegionLookup_();
   const pendingMapProjectIds = projects
     .filter((project) => {
       const existing = existingMapData.get(project.key);
@@ -452,6 +568,13 @@ function buildProjectIdSummary_(spreadsheet, options) {
     rows.push([
       project.projectId,
       project.projectUrl,
+      projectMetadata.address || '',
+      projectMetadata.state || '',
+      getProjectIdSummaryRegion_(projectMetadata.state, stateRegionLookup),
+      projectMetadata.solarPanel || '',
+      projectMetadata.inverter || '',
+      projectMetadata.installer || '',
+      projectMetadata.teamName || '',
       email.count,
       attachmentCount,
       pdfCount,
@@ -481,10 +604,16 @@ function buildProjectIdSummary_(spreadsheet, options) {
   });
 
   rows.sort((left, right) => {
-    const emailDifference = Number(right[2]) - Number(left[2]);
+    const emailDifference =
+      Number(right[PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX]) -
+      Number(left[PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX]);
     if (emailDifference !== 0) return emailDifference;
-    const rightTime = projectIdSummaryDateTime_(right[6]);
-    const leftTime = projectIdSummaryDateTime_(left[6]);
+    const rightTime = projectIdSummaryDateTime_(
+      right[PROJECT_ID_SUMMARY_LAST_EMAIL_INDEX],
+    );
+    const leftTime = projectIdSummaryDateTime_(
+      left[PROJECT_ID_SUMMARY_LAST_EMAIL_INDEX],
+    );
     if (rightTime !== leftTime) return rightTime - leftTime;
     return String(left[0]).localeCompare(String(right[0]));
   });
@@ -526,8 +655,33 @@ function buildProjectIdSummaryStats_(summary) {
     projectsWithComparisonDeltas:
       summary.rows.length - summary.projectsWithoutComparisonDeltas,
     projectsWithoutComparisonDeltas: summary.projectsWithoutComparisonDeltas,
-    projectsWithMapDataSource: summary.rows.filter((row) => row[7]).length,
-    projectsWithRgbBasemapUrl: summary.rows.filter((row) => row[8]).length,
+    projectsWithAddress: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Address')],
+    ).length,
+    projectsWithState: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('State')],
+    ).length,
+    projectsWithRegion: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Region')],
+    ).length,
+    projectsWithSolarPanel: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Solar Panel')],
+    ).length,
+    projectsWithInverter: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Inverter')],
+    ).length,
+    projectsWithInstaller: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Installer')],
+    ).length,
+    projectsWithTeamName: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Team Name')],
+    ).length,
+    projectsWithMapDataSource: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_MAP_DATA_SOURCE_INDEX],
+    ).length,
+    projectsWithRgbBasemapUrl: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_RGB_BASEMAP_URL_INDEX],
+    ).length,
     projectsWithProduction: summary.rows.filter(
       (row) =>
         row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX] ===
@@ -777,11 +931,35 @@ function fetchProjectIdSummaryProjectMetadata_(projectIds) {
       label: 'GoodLeap',
       queryLabel: 'goodleap',
       table: settings.goodLeapProjectsTable,
+      propertiesTable: projectIdSummaryRelatedTable_(
+        settings.goodLeapProjectsTable,
+        'properties',
+      ),
+      teamsTable: projectIdSummaryRelatedTable_(
+        settings.goodLeapProjectsTable,
+        'teams',
+      ),
+      installersTable: projectIdSummaryRelatedTable_(
+        settings.goodLeapProjectsTable,
+        'installers',
+      ),
     },
     {
       label: 'Artemis Sales',
       queryLabel: 'artemis_sales',
       table: settings.artemisSalesProjectsTable,
+      propertiesTable: projectIdSummaryRelatedTable_(
+        settings.artemisSalesProjectsTable,
+        'properties',
+      ),
+      teamsTable: projectIdSummaryRelatedTable_(
+        settings.artemisSalesProjectsTable,
+        'teams',
+      ),
+      installersTable: projectIdSummaryRelatedTable_(
+        settings.artemisSalesProjectsTable,
+        'installers',
+      ),
     },
   ];
   const result = emptyProjectIdSummaryProjectMetadataLookup_();
@@ -841,9 +1019,26 @@ function fetchProjectIdSummaryProjectMetadataFromTable_(
     .map((projectId) => postHogStringLiteral_(projectId))
     .join(', ');
   const projectIdExpression = `toString(p.${settings.projectIdField})`;
+  const projectAddress = `coalesce(nullIf(p.project_address, ''), ` +
+    `property.street, '')`;
+  const projectCity = `coalesce(nullIf(p.project_city, ''), property.city, '')`;
+  const projectState =
+    `coalesce(nullIf(p.project_state, ''), property.state, '')`;
+  const projectZipcode =
+    `coalesce(nullIf(p.project_zipcode, ''), property.zipcode, '')`;
   const query = [
     'SELECT',
     `  ${projectIdExpression} AS project_id,`,
+    `  concat(${projectAddress},`,
+    `    if(${projectCity} = '', '', concat(', ', ${projectCity})),`,
+    `    if(${projectState} = '', '', concat(', ', ${projectState})),`,
+    `    if(${projectZipcode} = '', '', concat(' ', ${projectZipcode}))) ` +
+      'AS address,',
+    `  ${projectState} AS state,`,
+    '  p.solar_panel_type AS solar_panel,',
+    '  p.inverter_type AS inverter,',
+    '  installer.name AS installer,',
+    '  team.name AS team_name,',
     `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_ENGINE_VERSION_FIELD} ` +
       'AS engine_version,',
     `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_CREATED_AT_FIELD} ` +
@@ -855,6 +1050,12 @@ function fetchProjectIdSummaryProjectMetadataFromTable_(
     `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_DESIGN_UPDATED_AT_FIELD} ` +
       'AS design_updated_at',
     `FROM ${source.table} AS p`,
+    `LEFT ANY JOIN ${source.propertiesTable} AS property`,
+    '  ON toString(property.id) = toString(p.property_id)',
+    `LEFT ANY JOIN ${source.teamsTable} AS team`,
+    '  ON toString(team.id) = toString(p.team_id)',
+    `LEFT ANY JOIN ${source.installersTable} AS installer`,
+    '  ON toString(installer.id) = toString(team.installer_id)',
     `WHERE ${projectIdExpression} IN (${literals})`,
     `ORDER BY p.${settings.sourceUpdatedAtField} DESC, ${projectIdExpression}`,
     `LIMIT ${Math.max(projectIds.length * 2, projectIds.length)}`,
@@ -870,6 +1071,12 @@ function parseProjectIdSummaryProjectMetadata_(response, lookupSource) {
   const columns = response.columns.map((column) => String(column).toLowerCase());
   const requiredColumns = [
     'project_id',
+    'address',
+    'state',
+    'solar_panel',
+    'inverter',
+    'installer',
+    'team_name',
     'engine_version',
     'created_at',
     'updated_at',
@@ -899,6 +1106,12 @@ function parseProjectIdSummaryProjectMetadata_(response, lookupSource) {
     const rawEngineVersion = row[indexes.engine_version];
     byProjectId.set(projectId, {
       lookupSource,
+      address: String(row[indexes.address] || '').trim(),
+      state: normalizeProjectIdSummaryState_(row[indexes.state]),
+      solarPanel: String(row[indexes.solar_panel] || '').trim(),
+      inverter: String(row[indexes.inverter] || '').trim(),
+      installer: String(row[indexes.installer] || '').trim(),
+      teamName: String(row[indexes.team_name] || '').trim(),
       engineVersion:
         rawEngineVersion === null || rawEngineVersion === undefined
           ? ''
@@ -914,6 +1127,16 @@ function parseProjectIdSummaryProjectMetadata_(response, lookupSource) {
     });
   });
   return byProjectId;
+}
+
+function projectIdSummaryRelatedTable_(projectsTable, relatedEntity) {
+  const table = String(projectsTable || '').trim();
+  if (!/_projects$/i.test(table)) {
+    throw new Error(
+      `Cannot derive ${relatedEntity} table from project table ${table}.`,
+    );
+  }
+  return table.replace(/projects$/i, relatedEntity);
 }
 
 function loadExistingProjectIdSummaryMapData_(sheet) {
@@ -948,10 +1171,17 @@ function loadExistingProjectIdSummaryProjectMetadata_(sheet) {
     .getValues();
   const headers = values[0].map((value) => String(value).trim());
   const projectIdIndex = headers.indexOf('Project ID');
+  const projectDetailIndexes = PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS.map(
+    (header) => headers.indexOf(header),
+  );
   const metadataIndexes = PROJECT_ID_SUMMARY_POSTHOG_HEADERS.map(
     (header) => headers.indexOf(header),
   );
-  if (projectIdIndex < 0 || metadataIndexes.some((index) => index < 0)) {
+  if (
+    projectIdIndex < 0 ||
+    projectDetailIndexes.some((index) => index < 0) ||
+    metadataIndexes.some((index) => index < 0)
+  ) {
     return byProjectId;
   }
 
@@ -959,6 +1189,12 @@ function loadExistingProjectIdSummaryProjectMetadata_(sheet) {
     const projectId = String(row[projectIdIndex] || '').trim().toLowerCase();
     if (!isProjectIdSummaryUuid_(projectId)) return;
     byProjectId.set(projectId, {
+      address: String(row[projectDetailIndexes[0]] || '').trim(),
+      state: normalizeProjectIdSummaryState_(row[projectDetailIndexes[1]]),
+      solarPanel: String(row[projectDetailIndexes[3]] || '').trim(),
+      inverter: String(row[projectDetailIndexes[4]] || '').trim(),
+      installer: String(row[projectDetailIndexes[5]] || '').trim(),
+      teamName: String(row[projectDetailIndexes[6]] || '').trim(),
       engineVersion: String(row[metadataIndexes[0]] || '').trim(),
       createdAt: normalizeProjectIdSummaryDate_(row[metadataIndexes[1]]),
       updatedAt: normalizeProjectIdSummaryDate_(row[metadataIndexes[2]]),
@@ -1315,6 +1551,115 @@ function buildProjectIdSummaryDeltaValues_(comparisonValues) {
   ].concat(comparisonValues.slice(3));
 }
 
+function getOrCreateProjectIdSummaryStateRegionsSheet_(spreadsheet) {
+  const sheetName = PROJECT_ID_SUMMARY_CONFIG.STATE_REGIONS_SHEET_NAME;
+  let sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) sheet = spreadsheet.insertSheet(sheetName);
+
+  if (sheet.getMaxColumns() < 2) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), 2 - sheet.getMaxColumns());
+  }
+  const requiredRows = PROJECT_ID_SUMMARY_STATE_REGIONS.length + 1;
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+  }
+
+  const currentHeaders = sheet.getLastRow() > 0
+    ? sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 2))
+        .getDisplayValues()[0]
+        .map((value) => String(value).trim())
+    : [];
+  const expectedHeaders = ['State', 'Region'];
+  const hasUnexpectedContent = currentHeaders.some(Boolean) &&
+    !projectIdSummaryHeadersMatch_(currentHeaders, expectedHeaders);
+  if (hasUnexpectedContent) {
+    throw new Error(
+      `${sheetName} already exists with an unexpected schema. ` +
+      'Rename or review that sheet before setup so no data is overwritten.',
+    );
+  }
+
+  const expectedRows = [expectedHeaders].concat(PROJECT_ID_SUMMARY_STATE_REGIONS);
+  const currentRows = sheet.getLastRow() >= expectedRows.length
+    ? sheet.getRange(1, 1, expectedRows.length, 2).getDisplayValues()
+    : [];
+  if (
+    sheet.getLastRow() !== expectedRows.length ||
+    !projectIdSummarySimpleRowsEqual_(currentRows, expectedRows)
+  ) {
+    if (sheet.getLastRow() > 0) {
+      sheet.getRange(1, 1, sheet.getLastRow(), 2).clearContent();
+    }
+    sheet.getRange(1, 1, expectedRows.length, 2).setValues(expectedRows);
+  }
+
+  sheet
+    .getRange(1, 1, 1, 2)
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.HEADER_BACKGROUND)
+    .setFontColor(PROJECT_ID_SUMMARY_CONFIG.HEADER_FONT_COLOR)
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+  sheet
+    .getRange(2, 1, PROJECT_ID_SUMMARY_STATE_REGIONS.length, 2)
+    .setBackground('#ffffff');
+  sheet.setFrozenRows(1);
+  sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
+  sheet.setColumnWidth(1, 110);
+  sheet.setColumnWidth(2, 150);
+  return sheet;
+}
+
+function loadProjectIdSummaryStateRegionLookup_(sheet) {
+  const values = sheet
+    .getRange(1, 1, Math.max(sheet.getLastRow(), 1), 2)
+    .getDisplayValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const stateIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'State',
+    sheet.getName(),
+  );
+  const regionIndex = requireProjectIdSummaryHeader_(
+    headers,
+    'Region',
+    sheet.getName(),
+  );
+  const lookup = new Map();
+  values.slice(1).forEach((row) => {
+    const state = normalizeProjectIdSummaryState_(row[stateIndex]);
+    const region = String(row[regionIndex] || '').trim();
+    if (state && region) lookup.set(state, region);
+  });
+  return lookup;
+}
+
+function buildDefaultProjectIdSummaryStateRegionLookup_() {
+  const lookup = new Map();
+  PROJECT_ID_SUMMARY_STATE_REGIONS.forEach(([state, region]) => {
+    lookup.set(state, region);
+  });
+  return lookup;
+}
+
+function getProjectIdSummaryRegion_(state, lookup) {
+  return lookup.get(normalizeProjectIdSummaryState_(state)) || '';
+}
+
+function normalizeProjectIdSummaryState_(value) {
+  const state = String(value == null ? '' : value).trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(state) ? state : '';
+}
+
+function projectIdSummarySimpleRowsEqual_(leftRows, rightRows) {
+  if (leftRows.length !== rightRows.length) return false;
+  return rightRows.every((rightRow, rowIndex) =>
+    rightRow.every(
+      (value, columnIndex) =>
+        String(leftRows[rowIndex][columnIndex] || '').trim() === String(value),
+    ),
+  );
+}
+
 function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   let sheet = spreadsheet.getSheetByName(
     PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME,
@@ -1364,6 +1709,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V7,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -1378,6 +1727,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1,
     )
   ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1,
+    );
     console.log(
       'Project ID Summary schema upgraded: Map Data Source, RGB Basemap URL, ' +
       'Production Category Group, Shade Report Deltas, and PostHog project ' +
@@ -1389,6 +1742,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V2,
     )
   ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V2,
+    );
     console.log(
       'Project ID Summary schema upgraded: Production Category Group and ' +
       'Shade Report Delta and PostHog project metadata columns were appended.',
@@ -1399,6 +1756,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3,
     )
   ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3,
+    );
     console.log(
       'Project ID Summary schema upgraded: Shade Report Delta and PostHog ' +
       'project metadata columns were appended.',
@@ -1409,6 +1770,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4,
     )
   ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V4,
+    );
     console.log(
       'Project ID Summary schema upgraded: Engine Version and project date ' +
       'columns were appended.',
@@ -1457,6 +1822,21 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'Production Category Group was moved after Tolerance %, and existing ' +
       'Delta and PostHog values were shifted safely.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: Address, State, Region, Solar Panel, ' +
+      'Inverter, Installer, and Team Name were inserted after Project URL. ' +
+      'Existing values were shifted safely.',
+    );
   }
 
   sheet
@@ -1495,10 +1875,19 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
   sheet.setColumnWidth(1, 280);
   sheet.setColumnWidth(2, 520);
-  sheet.setColumnWidths(3, 3, 135);
-  sheet.setColumnWidths(6, 2, 180);
-  sheet.setColumnWidth(8, 180);
-  sheet.setColumnWidth(9, 520);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Address'), 300);
+  sheet.setColumnWidth(projectIdSummaryColumn_('State'), 90);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Region'), 120);
+  sheet.setColumnWidths(projectIdSummaryColumn_('Solar Panel'), 2, 220);
+  sheet.setColumnWidths(projectIdSummaryColumn_('Installer'), 2, 180);
+  sheet.setColumnWidths(projectIdSummaryColumn_('Email Count'), 3, 135);
+  sheet.setColumnWidths(
+    projectIdSummaryColumn_('First Email Received At'),
+    2,
+    180,
+  );
+  sheet.setColumnWidth(projectIdSummaryColumn_('Map Data Source'), 180);
+  sheet.setColumnWidth(projectIdSummaryColumn_('RGB Basemap URL'), 520);
   sheet.setColumnWidth(aiContextStartColumn, 180);
   sheet.setColumnWidth(aiContextStartColumn + 1, 360);
   sheet.setColumnWidths(aiContextStartColumn + 2, 2, 520);
@@ -1601,12 +1990,41 @@ function styleProjectIdSummaryAbsoluteDeltaColumns_(
 function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   if (rowCount < 1) return;
 
-  sheet.getRange(startRow, 3, rowCount, 3).setNumberFormat('#,##0');
   sheet
-    .getRange(startRow, 6, rowCount, 2)
+    .getRange(
+      startRow,
+      projectIdSummaryColumn_('Address'),
+      rowCount,
+      PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS.length,
+    )
+    .setBackground('#ffffff')
+    .setNumberFormat('@')
+    .setWrap(false);
+  sheet
+    .getRange(
+      startRow,
+      projectIdSummaryColumn_('Email Count'),
+      rowCount,
+      3,
+    )
+    .setNumberFormat('#,##0');
+  sheet
+    .getRange(
+      startRow,
+      projectIdSummaryColumn_('First Email Received At'),
+      rowCount,
+      2,
+    )
     .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
   sheet.getRange(startRow, 1, rowCount, 2).setWrap(false);
-  sheet.getRange(startRow, 8, rowCount, 2).setWrap(false);
+  sheet
+    .getRange(
+      startRow,
+      projectIdSummaryColumn_('Map Data Source'),
+      rowCount,
+      2,
+    )
+    .setWrap(false);
   const aiContextStartColumn = PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1;
   sheet
     .getRange(
@@ -1693,6 +2111,12 @@ function projectIdSummaryHeadersMatch_(currentHeaders, expectedHeaders) {
   return currentHeaders.slice(expectedHeaders.length).every((header) => !header);
 }
 
+function projectIdSummaryColumn_(header) {
+  const index = PROJECT_ID_SUMMARY_HEADERS.indexOf(header);
+  if (index < 0) throw new Error(`Unknown Project ID Summary header: ${header}.`);
+  return index + 1;
+}
+
 function loadExistingProjectIdSummaryRows_(sheet) {
   if (sheet.getLastRow() < 2) return [];
   return sheet
@@ -1744,12 +2168,21 @@ function setProjectIdSummaryRichLinks_(sheet, rows) {
   sheet.getRange(2, 2, rows.length, 1).setRichTextValues(richUrls);
 
   const richBasemapUrls = rows.map((row) => {
-    const url = safeProjectIdSummaryUrl_(row[8]);
+    const url = safeProjectIdSummaryUrl_(
+      row[PROJECT_ID_SUMMARY_RGB_BASEMAP_URL_INDEX],
+    );
     const builder = SpreadsheetApp.newRichTextValue().setText(url);
     if (url) builder.setLinkUrl(url);
     return [builder.build()];
   });
-  sheet.getRange(2, 9, rows.length, 1).setRichTextValues(richBasemapUrls);
+  sheet
+    .getRange(
+      2,
+      PROJECT_ID_SUMMARY_RGB_BASEMAP_URL_INDEX + 1,
+      rows.length,
+      1,
+    )
+    .setRichTextValues(richBasemapUrls);
 }
 
 function projectIdSummaryRowsEqual_(leftRows, rightRows) {

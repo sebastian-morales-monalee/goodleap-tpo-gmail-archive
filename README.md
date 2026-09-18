@@ -232,18 +232,26 @@ It:
   ID from `PostHog Projects`.
 - Copies the authoritative Project URL instead of constructing it, preserving
   the correct GoodLeap or Artemis Sales domain.
+- Enriches columns C:I from PostHog with Address, State, Region, Solar Panel,
+  Inverter, Installer, and Team Name. GoodLeap is queried first and Artemis
+  Sales is used only when the Project ID is not found in GoodLeap. Address and
+  State fall back to the related property record; Installer is resolved through
+  the assigned team.
+- Creates and maintains `US State Regions` as a local State-to-Region reference
+  table. Alaska, Hawaii, and Puerto Rico remain separate from Northeast,
+  Midwest, South, and West.
 - Counts associated rows in `AI Analysis`, `Attachments`, and `PDF Analysis`.
 - Shows the first and most recent `Email Received At` value for each project.
 - Selects the matching `AI Analysis` row with the most recent valid `Email
   Received At` value, using the last sheet occurrence to break exact timestamp
   ties. It copies that row's `Gmail Message ID`, `Required Evidence`, `Technical
-  Notes`, and `AI Summary` into J:M, plus `Email Received At`, `Proposed
-  Production kWh`, `Benchmark Production kWh`, and `Tolerance %` into N:Q.
+  Notes`, and `AI Summary` into Q:T, plus `Email Received At`, `Proposed
+  Production kWh`, `Benchmark Production kWh`, and `Tolerance %` into U:X.
 - Assigns each project to `Production with other categories` when at least one
   of its categorized emails contains the exact `Production` value in
   `Categories`; otherwise it uses `Other Categories without Production`.
   Projects without a categorized email remain blank. The group occupies column
-  R, immediately before the Shade Report Delta columns.
+  Y, immediately before the Shade Report Delta columns.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
@@ -258,7 +266,7 @@ It:
   `last_status_updated_at`, and `design_updated_at` from the GoodLeap projects
   table, with Artemis Sales as fallback. The corresponding `Engine Version`,
   `Created At`, `Updated At`, `Last Status Updated At`, and `Design Updated At`
-  columns occupy AN:AR and retain prior successful values after temporary
+  columns occupy AU:AY and retain prior successful values after temporary
   PostHog query failures.
 - Sorts projects by Email Count and then by the most recent email.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
@@ -927,12 +935,15 @@ No new Script Property or trigger is required.
 4. Open `ProjectIdSummary.gs` and run
    `previewProjectIdSummaryPostHogData()`.
    Confirm that known GoodLeap and Sales projects show the expected lookup
-   source, map data source, RGB URL, engine version, and project dates. The
-   preview does not write the sheet.
+   source, address, state, equipment, installer, team, map data source, RGB URL,
+   engine version, and project dates. The preview does not write the sheet.
 5. Run `previewProjectIdSummary()`. Confirm that the logged unique-project,
    email-row, and PDF-row totals match the source sheets.
-6. Run `setupProjectIdSummary()` once. It safely appends `Map Data Source`,
-   `RGB Basemap URL`, the latest Gmail context and AI production values,
+6. Run `setupProjectIdSummary()` once. It safely inserts Address, State, Region,
+   Solar Panel, Inverter, Installer, and Team Name after Project URL; creates the
+   `US State Regions` reference; and preserves all existing values while moving
+   them right. It also appends `Map Data Source`, `RGB Basemap URL`, the latest
+   Gmail context and AI production values,
    `Production Category Group`, and the Shade Report Delta columns plus
    `Absolute Delta Azimuth`, `Absolute Delta Pitch`, `Absolute Azimuth + Pitch`,
    `Engine Version`, `Created At`, `Updated At`, `Last Status Updated At`, and
@@ -941,7 +952,8 @@ No new Script Property or trigger is required.
    values in `AI Analysis`, every latest AI field comes from the same newest
    matching email, Delta values match the `Recalculated Weighted Average` rows
    in `Shade Reports Comparison`, the three absolute metrics are calculated,
-   and the project metadata matches PostHog.
+   the project metadata matches PostHog, and AK, HI, and PR map to Alaska,
+   Hawaii, and Puerto Rico rather than the four continental regions.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
 8. Run `refreshAIAnalysisDashboard()` once to rebuild the weekly stacked chart
@@ -1307,19 +1319,21 @@ The deployment is ready only when all of the following are true:
 - `AI Analysis` and `PDF Analysis` contain the same Project ID shown for their
   Application ID in `PostHog Projects`, or remain blank when it is `Not Found`.
 - `Project ID Summary` contains one row per resolved Project ID, uses the URL
-  from `PostHog Projects`, reconciles its email and PDF counts with the two
+  from `PostHog Projects`, shows Address, State, Region, Solar Panel, Inverter,
+  Installer, and Team Name in C:I, and reconciles its email and PDF counts with the two
   analysis sheets, and shows the PostHog map source plus a clickable RGB
   basemap URL when available. Its `Production Category Group` uses the same
   exact `Categories`-based Production rule as the weekly dashboard. Its Delta
   columns reproduce each project's `Recalculated Weighted Average` values from
-  `Shade Reports Comparison`. Columns J:M reproduce the Gmail Message ID and
-  three contextual AI fields, while N:Q reproduce the date and three production
+  `Shade Reports Comparison`. Columns Q:T reproduce the Gmail Message ID and
+  three contextual AI fields, while U:X reproduce the date and three production
   values from the same newest matching `AI Analysis` row. `Production Category
-  Group` occupies R. The three
+  Group` occupies Y. The three
   highlighted absolute columns show the absolute Azimuth Delta, absolute Pitch
-  Delta, and their sum. Columns AN:AR show the project engine version and four
+  Delta, and their sum. Columns AU:AY show the project engine version and four
   project lifecycle timestamps from the GoodLeap or Artemis Sales project
-  record.
+  record. `US State Regions` contains the static regional association, with
+  Alaska, Hawaii, and Puerto Rico represented as separate regions.
 - `Shade Reports Comparison` contains no duplicate Project ID blocks and its
   Aurora and Artemis source links open correctly. Exact Panel matches outside
   the geometry thresholds, probable or forced matches, and unmatched rows are
