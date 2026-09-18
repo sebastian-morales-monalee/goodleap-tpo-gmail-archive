@@ -140,10 +140,26 @@ const PROJECT_ID_SUMMARY_POSTHOG_HEADERS = [
   'Design Updated At',
 ];
 
+const LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V10 = [
+  'Latest AI Email Received At',
+  'Proposed Production kWh',
+  'Benchmark Production kWh',
+  'Tolerance %',
+];
+
+const LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V11 = [
+  'Latest AI Email Received At',
+  'Proposed Production kWh',
+  'Benchmark Production kWh',
+  '(Bench - Art)/Art %',
+  'Tolerance %',
+];
+
 const PROJECT_ID_SUMMARY_LATEST_AI_HEADERS = [
   'Latest AI Email Received At',
   'Proposed Production kWh',
   'Benchmark Production kWh',
+  '(Bench-Art)/Art %',
   'Tolerance %',
 ];
 
@@ -249,14 +265,14 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V6 =
   );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V7 =
   LEGACY_PROJECT_ID_SUMMARY_HEADERS_V3.concat(
-    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V10,
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
-    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V10,
     ['Production Category Group'],
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
@@ -264,7 +280,23 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V8 =
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V9 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_V9.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
-    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V10,
+    ['Production Category Group'],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V10 =
+  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V10,
+    ['Production Category Group'],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11 =
+  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V11,
     ['Production Category Group'],
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
@@ -415,8 +447,10 @@ function previewProjectIdSummary() {
       row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1],
     benchmarkProductionKwh:
       row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
-    tolerancePercent:
+    '(Bench-Art)/Art %':
       row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
+    tolerancePercent:
+      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
     productionCategoryGroup:
       row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX] || '',
     shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
@@ -624,6 +658,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
       email.latestAnalysisReceivedAt,
       email.latestProposedProductionKwh,
       email.latestBenchmarkProductionKwh,
+      calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
+        email.latestBenchmarkProductionKwh,
+        email.latestProposedProductionKwh,
+      ),
       email.latestTolerancePercent,
       getProjectIdSummaryCategoryGroup_(email),
     ].concat(
@@ -766,9 +804,14 @@ function buildProjectIdSummaryStats_(summary) {
         row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
       ),
     ).length,
-    projectsWithTolerancePercent: summary.rows.filter(
+    projectsWithBenchMinusArtOverArtPercent: summary.rows.filter(
       (row) => Number.isFinite(
         row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
+      ),
+    ).length,
+    projectsWithTolerancePercent: summary.rows.filter(
+      (row) => Number.isFinite(
+        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
       ),
     ).length,
     mapFoundInGoodLeap: summary.mapLookup.foundInGoodLeap,
@@ -1506,6 +1549,22 @@ function getProjectIdSummaryCategoryGroup_(emailMetric) {
     : PROJECT_ID_SUMMARY_CONFIG.OTHER_CATEGORIES_GROUP_LABEL;
 }
 
+function calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
+  benchmarkProductionKwh,
+  proposedProductionKwh,
+) {
+  const benchmark = normalizeProjectIdSummaryNumber_(benchmarkProductionKwh);
+  const proposed = normalizeProjectIdSummaryNumber_(proposedProductionKwh);
+  if (
+    !Number.isFinite(benchmark) ||
+    !Number.isFinite(proposed) ||
+    proposed === 0
+  ) {
+    return '';
+  }
+  return (benchmark - proposed) / proposed;
+}
+
 /** Uses the same exact multi-value matching rule as AI Dashboard. */
 function projectIdSummaryCategoriesIncludeProduction_(value) {
   if (typeof doesAIAnalysisCategoriesIncludeProduction_ === 'function') {
@@ -1806,6 +1865,14 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V9,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V10,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -1944,6 +2011,34 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'Project ID Summary schema upgraded: Application ID was inserted after ' +
       'Project ID. Existing columns and values were shifted safely.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V10,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V10,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: (Bench-Art)/Art % was inserted ' +
+      'before Tolerance %. Existing columns and values were shifted safely.',
+    );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: the calculated percentage header ' +
+      'was normalized to (Bench-Art)/Art %. Existing values were preserved.',
+    );
   }
 
   sheet
@@ -1953,7 +2048,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     .setFontColor(PROJECT_ID_SUMMARY_CONFIG.HEADER_FONT_COLOR)
     .setFontWeight('bold')
     .setHorizontalAlignment('center')
-    .setVerticalAlignment('middle');
+    .setVerticalAlignment('middle')
+    .setWrap(true);
   const aiContextStartColumn = PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1;
   const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
   const categoryGroupColumn = PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
@@ -2001,7 +2097,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidths(aiContextStartColumn + 2, 2, 520);
   sheet.setColumnWidth(latestAiStartColumn, 180);
   sheet.setColumnWidths(latestAiStartColumn + 1, 2, 175);
-  sheet.setColumnWidth(latestAiStartColumn + 3, 135);
+  sheet.setColumnWidth(latestAiStartColumn + 3, 165);
+  sheet.setColumnWidth(latestAiStartColumn + 4, 135);
   sheet.setColumnWidth(categoryGroupColumn, 260);
   sheet.setColumnWidths(
     deltaStartColumn,
@@ -2021,6 +2118,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   if (existingDataRows > 0) {
     formatProjectIdSummaryRows_(sheet, 2, existingDataRows);
   }
+  applyProjectIdSummaryWrap_(sheet);
   return sheet;
 }
 
@@ -2063,6 +2161,16 @@ function migrateProjectIdSummarySchema_(sheet, sourceHeaders) {
     ] = hasDeltaAzimuth && hasDeltaPitch
       ? absoluteDeltaAzimuth + absoluteDeltaPitch
       : '';
+    migratedRow[
+      PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')
+    ] = calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
+      migratedRow[
+        PROJECT_ID_SUMMARY_HEADERS.indexOf('Benchmark Production kWh')
+      ],
+      migratedRow[
+        PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh')
+      ],
+    );
     return migratedRow;
   });
 
@@ -2095,6 +2203,12 @@ function styleProjectIdSummaryAbsoluteDeltaColumns_(
   });
 }
 
+function applyProjectIdSummaryWrap_(sheet) {
+  sheet
+    .getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns())
+    .setWrap(true);
+}
+
 function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   if (rowCount < 1) return;
 
@@ -2107,7 +2221,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     )
     .setBackground('#ffffff')
     .setNumberFormat('@')
-    .setWrap(false);
+    .setWrap(true);
   sheet
     .getRange(
       startRow,
@@ -2132,7 +2246,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       3,
     )
     .setNumberFormat('@')
-    .setWrap(false);
+    .setWrap(true);
   sheet
     .getRange(
       startRow,
@@ -2140,7 +2254,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       rowCount,
       2,
     )
-    .setWrap(false);
+    .setWrap(true);
   const aiContextStartColumn = PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1;
   sheet
     .getRange(
@@ -2150,7 +2264,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
-    .setWrap(false);
+    .setWrap(true);
 
   const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
   sheet
@@ -2161,7 +2275,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
-    .setWrap(false);
+    .setWrap(true);
   sheet
     .getRange(startRow, latestAiStartColumn, rowCount, 1)
     .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
@@ -2170,6 +2284,9 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     .setNumberFormat('0.###');
   sheet
     .getRange(startRow, latestAiStartColumn + 3, rowCount, 1)
+    .setNumberFormat('0.00%');
+  sheet
+    .getRange(startRow, latestAiStartColumn + 4, rowCount, 1)
     .setNumberFormat('0.##');
   sheet
     .getRange(
@@ -2179,7 +2296,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       1,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
-    .setWrap(false);
+    .setWrap(true);
 
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
@@ -2191,7 +2308,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     )
     .setNumberFormat('0.####')
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_DATA_BACKGROUND)
-    .setWrap(false);
+    .setWrap(true);
   styleProjectIdSummaryAbsoluteDeltaColumns_(
     sheet,
     startRow,
@@ -2210,7 +2327,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     .setBackground(
       PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND,
     )
-    .setWrap(false);
+    .setWrap(true);
   sheet
     .getRange(startRow, metadataStartColumn, rowCount, 1)
     .setNumberFormat('@');
@@ -2272,6 +2389,7 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
   formatProjectIdSummaryRows_(sheet, 2, rows.length);
 
   setProjectIdSummaryRichLinks_(sheet, rows);
+  applyProjectIdSummaryWrap_(sheet);
 }
 
 function setProjectIdSummaryRichLinks_(sheet, rows) {
