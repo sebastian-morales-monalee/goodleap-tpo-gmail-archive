@@ -36,6 +36,7 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   PRODUCTION_CATEGORY: 'Production',
   PRODUCTION_GROUP_LABEL: 'Production with other categories',
   OTHER_CATEGORIES_GROUP_LABEL: 'Other Categories without Production',
+  PROJECT_STATUS_FIELD: 'project_status',
   PROJECT_ENGINE_VERSION_FIELD: 'production_engine_version',
   PROJECT_CREATED_AT_FIELD: 'created_at',
   PROJECT_UPDATED_AT_FIELD: 'updated_at',
@@ -211,6 +212,7 @@ const PROJECT_ID_SUMMARY_BASE_HEADERS = [
 
 const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER =
   'Is tolerance into the range [-5%, +15%]';
+const PROJECT_ID_SUMMARY_STATUS_HEADER = 'Status';
 
 const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
@@ -218,6 +220,7 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   [
     'Production Category Group',
     PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
+    PROJECT_ID_SUMMARY_STATUS_HEADER,
   ],
   PROJECT_ID_SUMMARY_DELTA_HEADERS,
   PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
@@ -317,6 +320,17 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12 =
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13 =
+  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    [
+      'Production Category Group',
+      PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
+    ],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
   PROJECT_ID_SUMMARY_BASE_HEADERS.length;
 const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
@@ -327,8 +341,10 @@ const PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX =
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length;
 const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX =
   PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
-const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
+const PROJECT_ID_SUMMARY_STATUS_INDEX =
   PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
+const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
+  PROJECT_ID_SUMMARY_STATUS_INDEX + 1;
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
   PROJECT_ID_SUMMARY_DELTA_START_INDEX +
   PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
@@ -397,6 +413,7 @@ function previewProjectIdSummaryPostHogData() {
       inverter: metadata.inverter || '',
       installer: metadata.installer || '',
       teamName: metadata.teamName || '',
+      status: metadata.status || '',
       engineVersion: metadata.engineVersion || '',
       createdAt: metadata.createdAt || '',
       updatedAt: metadata.updatedAt || '',
@@ -473,6 +490,7 @@ function previewProjectIdSummary() {
       row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX] || '',
     [PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER]:
       row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX],
+    status: row[PROJECT_ID_SUMMARY_STATUS_INDEX] || '',
     shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
       (result, header, offset) => {
         result[header] = row[PROJECT_ID_SUMMARY_DELTA_START_INDEX + offset];
@@ -687,6 +705,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       email.latestTolerancePercent,
       getProjectIdSummaryCategoryGroup_(email),
       calculateProjectIdSummaryToleranceRange_(benchArtPercent),
+      projectMetadata.status || '',
     ].concat(
       deltaValues,
       [
@@ -845,6 +864,9 @@ function buildProjectIdSummaryStats_(summary) {
     ).length,
     projectsWithoutCalculatedTolerance: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX] === '',
+    ).length,
+    projectsWithStatus: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_STATUS_INDEX],
     ).length,
     mapFoundInGoodLeap: summary.mapLookup.foundInGoodLeap,
     mapFoundInArtemisSales: summary.mapLookup.foundInArtemisSales,
@@ -1157,6 +1179,7 @@ function fetchProjectIdSummaryProjectMetadataFromTable_(
     '  p.inverter_type AS inverter,',
     '  installer.name AS installer,',
     '  team.name AS team_name,',
+    `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_STATUS_FIELD} AS status,`,
     `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_ENGINE_VERSION_FIELD} ` +
       'AS engine_version,',
     `  p.${PROJECT_ID_SUMMARY_CONFIG.PROJECT_CREATED_AT_FIELD} ` +
@@ -1195,6 +1218,7 @@ function parseProjectIdSummaryProjectMetadata_(response, lookupSource) {
     'inverter',
     'installer',
     'team_name',
+    'status',
     'engine_version',
     'created_at',
     'updated_at',
@@ -1230,6 +1254,7 @@ function parseProjectIdSummaryProjectMetadata_(response, lookupSource) {
       inverter: String(row[indexes.inverter] || '').trim(),
       installer: String(row[indexes.installer] || '').trim(),
       teamName: String(row[indexes.team_name] || '').trim(),
+      status: String(row[indexes.status] || '').trim(),
       engineVersion:
         rawEngineVersion === null || rawEngineVersion === undefined
           ? ''
@@ -1295,8 +1320,10 @@ function loadExistingProjectIdSummaryProjectMetadata_(sheet) {
   const metadataIndexes = PROJECT_ID_SUMMARY_POSTHOG_HEADERS.map(
     (header) => headers.indexOf(header),
   );
+  const statusIndex = headers.indexOf(PROJECT_ID_SUMMARY_STATUS_HEADER);
   if (
     projectIdIndex < 0 ||
+    statusIndex < 0 ||
     projectDetailIndexes.some((index) => index < 0) ||
     metadataIndexes.some((index) => index < 0)
   ) {
@@ -1313,6 +1340,7 @@ function loadExistingProjectIdSummaryProjectMetadata_(sheet) {
       inverter: String(row[projectDetailIndexes[4]] || '').trim(),
       installer: String(row[projectDetailIndexes[5]] || '').trim(),
       teamName: String(row[projectDetailIndexes[6]] || '').trim(),
+      status: String(row[statusIndex] || '').trim(),
       engineVersion: String(row[metadataIndexes[0]] || '').trim(),
       createdAt: normalizeProjectIdSummaryDate_(row[metadataIndexes[1]]),
       updatedAt: normalizeProjectIdSummaryDate_(row[metadataIndexes[2]]),
@@ -1915,6 +1943,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -2097,6 +2129,21 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'Production Category Group. Existing Delta and PostHog values were ' +
       'shifted safely.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: Status was inserted after the ' +
+      'calculated tolerance-range column. Existing Delta and PostHog values ' +
+      'were shifted safely.',
+    );
   }
 
   sheet
@@ -2112,6 +2159,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
   const categoryGroupColumn = PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
   const toleranceRangeColumn = PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
+  const statusColumn = PROJECT_ID_SUMMARY_STATUS_INDEX + 1;
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
     .getRange(
@@ -2160,6 +2208,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(latestAiStartColumn + 4, 135);
   sheet.setColumnWidth(categoryGroupColumn, 260);
   sheet.setColumnWidth(toleranceRangeColumn, 190);
+  sheet.setColumnWidth(statusColumn, 150);
   sheet.setColumnWidths(
     deltaStartColumn,
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
@@ -2391,6 +2440,16 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);
   styleProjectIdSummaryToleranceRangeColumn_(sheet, startRow, rowCount);
+  sheet
+    .getRange(
+      startRow,
+      PROJECT_ID_SUMMARY_STATUS_INDEX + 1,
+      rowCount,
+      1,
+    )
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
+    .setNumberFormat('@')
+    .setWrap(true);
 
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet

@@ -279,7 +279,9 @@ It:
   calculated `(Bench-Art)/Art %`: it stores `TRUE` for inclusive values from
   -5% through +15%, `FALSE` outside that range, and remains blank when the
   percentage cannot be calculated. TRUE cells are green and FALSE cells are
-  pink. Shade Report Delta columns begin in AC.
+  pink. Column AC, `Status`, contains the current Artemis project status from
+  PostHog. GoodLeap is queried first and Artemis Sales is used only when the
+  Project ID is not found in GoodLeap. Shade Report Delta columns begin in AD.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
@@ -290,12 +292,12 @@ It:
 - Copies Delta Panel Count, aggregate Azimuth and Pitch deltas, annual TOF,
   Solar Access, TSRF, and Jan-Dec deltas from each project's `Recalculated
   Weighted Average` row in `Shade Reports Comparison`.
-- Reads `production_engine_version`, `created_at`, `updated_at`,
-  `last_status_updated_at`, and `design_updated_at` from the GoodLeap projects
-  table, with Artemis Sales as fallback. The corresponding `Engine Version`,
-  `Created At`, `Updated At`, `Last Status Updated At`, and `Design Updated At`
-  columns occupy AX:BB and retain prior successful values after temporary
-  PostHog query failures.
+- Reads `project_status`, `production_engine_version`, `created_at`,
+  `updated_at`, `last_status_updated_at`, and `design_updated_at` from the
+  GoodLeap projects table, with Artemis Sales as fallback. The corresponding
+  `Engine Version`, `Created At`, `Updated At`, `Last Status Updated At`, and
+  `Design Updated At` columns occupy AY:BC and retain prior successful values
+  after temporary PostHog query failures.
 - Applies wrapped text to every cell in `Project ID Summary` on setup and every
   refresh, including the header and all currently allocated blank cells.
 - Sorts projects by Email Count and then by the most recent email.
@@ -987,8 +989,8 @@ No new Script Property or trigger is required.
    Gmail context and AI production values, the calculated
    `(Bench-Art)/Art %`,
    `Production Category Group`,
-   `Is tolerance into the range [-5%, +15%]`, and the Shade Report Delta
-   columns plus
+   `Is tolerance into the range [-5%, +15%]`, `Status`, and the Shade Report
+   Delta columns plus
    `Absolute Delta Azimuth`, `Absolute Delta Pitch`, `Absolute Azimuth + Pitch`,
    `Engine Version`, `Created At`, `Updated At`, `Last Status Updated At`, and
    `Design Updated At` to legacy layouts and backfills historical projects.
@@ -1002,7 +1004,9 @@ No new Script Property or trigger is required.
    use wrapped text, the tolerance-range column contains real booleans with
    inclusive -5% and +15% boundaries (green TRUE, pink FALSE, blank when the
    percentage is unavailable),
-   the project metadata matches PostHog, and AK, HI, and PR map to Alaska,
+   `Status` matches the current Artemis project status from GoodLeap or the
+   Sales fallback, the remaining project metadata matches PostHog, and AK, HI,
+   and PR map to Alaska,
    Hawaii, and Puerto Rico rather than the four continental regions.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
