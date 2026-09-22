@@ -16,6 +16,7 @@ const PROJECT_ID_SUMMARY_CONFIG = {
   ATTACHMENTS_SHEET_NAME: 'Attachments',
   COMPARISON_SHEET_NAME: 'Shade Reports Comparison',
   STATE_REGIONS_SHEET_NAME: 'US State Regions',
+  STATUS_ORDER_SHEET_NAME: 'Status Order',
   COMPARISON_MATCH_TYPE: 'Recalculated Weighted Average',
   HEADER_BACKGROUND: '#7200c9',
   HEADER_FONT_COLOR: '#ffffff',
@@ -97,6 +98,23 @@ const PROJECT_ID_SUMMARY_STATE_REGIONS = [
   ['WV', 'South'],
   ['WI', 'Midwest'],
   ['WY', 'West'],
+];
+
+// An orientative GoodLeap sequence, not a guarantee of a single linear workflow.
+const PROJECT_ID_SUMMARY_STATUS_ORDERS = [
+  [1, 'Proposal Created'],
+  [2, 'Credit Submitted'],
+  [3, 'Credit Approved'],
+  [4, 'Contract Sent'],
+  [5, 'Contract Signed'],
+  [6, 'NTP'],
+  [7, 'Site Survey'],
+  [8, 'Design & Engineering'],
+  [9, 'Permitting & Interconnection'],
+  [10, 'Install'],
+  [11, 'Inspection'],
+  [12, 'PTO'],
+  [13, 'Complete'],
 ];
 
 const PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS = [
@@ -213,6 +231,7 @@ const PROJECT_ID_SUMMARY_BASE_HEADERS = [
 const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER =
   'Is tolerance into the range [-5%, +15%]';
 const PROJECT_ID_SUMMARY_STATUS_HEADER = 'Status';
+const PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER = 'Status Order';
 
 const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
@@ -221,6 +240,7 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
     'Production Category Group',
     PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
     PROJECT_ID_SUMMARY_STATUS_HEADER,
+    PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER,
   ],
   PROJECT_ID_SUMMARY_DELTA_HEADERS,
   PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
@@ -331,6 +351,18 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13 =
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14 =
+  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    [
+      'Production Category Group',
+      PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
+      PROJECT_ID_SUMMARY_STATUS_HEADER,
+    ],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
   PROJECT_ID_SUMMARY_BASE_HEADERS.length;
 const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
@@ -343,8 +375,10 @@ const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX =
   PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
 const PROJECT_ID_SUMMARY_STATUS_INDEX =
   PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
-const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
+const PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX =
   PROJECT_ID_SUMMARY_STATUS_INDEX + 1;
+const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
+  PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1;
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
   PROJECT_ID_SUMMARY_DELTA_START_INDEX +
   PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
@@ -491,6 +525,7 @@ function previewProjectIdSummary() {
     [PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER]:
       row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX],
     status: row[PROJECT_ID_SUMMARY_STATUS_INDEX] || '',
+    statusOrder: row[PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX] || '',
     shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
       (result, header, offset) => {
         result[header] = row[PROJECT_ID_SUMMARY_DELTA_START_INDEX + offset];
@@ -556,6 +591,12 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
     getOrCreateProjectIdSummaryStateRegionsSheet_(spreadsheet);
   const stateRegionLookup =
     loadProjectIdSummaryStateRegionLookup_(stateRegionsSheet);
+  const statusOrderSheet = getOrCreateProjectIdSummaryStatusOrderSheet_(
+    spreadsheet,
+  );
+  const statusOrderLookup = loadProjectIdSummaryStatusOrderLookup_(
+    statusOrderSheet,
+  );
   const sheet = getOrCreateProjectIdSummarySheet_(spreadsheet);
   const existingMapData = loadExistingProjectIdSummaryMapData_(sheet);
   const existingProjectMetadata =
@@ -565,6 +606,7 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
     existingMapData,
     existingProjectMetadata,
     stateRegionLookup,
+    statusOrderLookup,
   });
   const existingRows = loadExistingProjectIdSummaryRows_(sheet);
   const unchanged = projectIdSummaryRowsEqual_(existingRows, summary.rows);
@@ -604,6 +646,14 @@ function buildProjectIdSummary_(spreadsheet, options) {
   const stateRegionLookup = options && options.stateRegionLookup
     ? options.stateRegionLookup
     : buildDefaultProjectIdSummaryStateRegionLookup_();
+  const statusOrderSheet = spreadsheet.getSheetByName(
+    PROJECT_ID_SUMMARY_CONFIG.STATUS_ORDER_SHEET_NAME,
+  );
+  const statusOrderLookup = options && options.statusOrderLookup
+    ? options.statusOrderLookup
+    : statusOrderSheet
+      ? loadProjectIdSummaryStatusOrderLookup_(statusOrderSheet)
+      : buildDefaultProjectIdSummaryStatusOrderLookup_();
   const pendingMapProjectIds = projects
     .filter((project) => {
       const existing = existingMapData.get(project.key);
@@ -706,6 +756,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
       getProjectIdSummaryCategoryGroup_(email),
       calculateProjectIdSummaryToleranceRange_(benchArtPercent),
       projectMetadata.status || '',
+      getProjectIdSummaryStatusOrder_(
+        projectMetadata.status,
+        statusOrderLookup,
+      ),
     ].concat(
       deltaValues,
       [
@@ -867,6 +921,9 @@ function buildProjectIdSummaryStats_(summary) {
     ).length,
     projectsWithStatus: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_STATUS_INDEX],
+    ).length,
+    projectsWithStatusOrder: summary.rows.filter(
+      (row) => Number.isInteger(row[PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX]),
     ).length,
     mapFoundInGoodLeap: summary.mapLookup.foundInGoodLeap,
     mapFoundInArtemisSales: summary.mapLookup.foundInArtemisSales,
@@ -1823,6 +1880,88 @@ function getOrCreateProjectIdSummaryStateRegionsSheet_(spreadsheet) {
   return sheet;
 }
 
+function getOrCreateProjectIdSummaryStatusOrderSheet_(spreadsheet) {
+  const sheetName = PROJECT_ID_SUMMARY_CONFIG.STATUS_ORDER_SHEET_NAME;
+  let sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) sheet = spreadsheet.insertSheet(sheetName);
+  if (sheet.getMaxColumns() < 2) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), 2 - sheet.getMaxColumns());
+  }
+  const requiredRows = PROJECT_ID_SUMMARY_STATUS_ORDERS.length + 1;
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+  }
+
+  const headers = sheet.getLastRow() > 0
+    ? sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 2))
+        .getDisplayValues()[0].map((value) => String(value).trim())
+    : [];
+  const expectedHeaders = ['Order', 'Status'];
+  if (headers.some(Boolean) &&
+      !projectIdSummaryHeadersMatch_(headers, expectedHeaders)) {
+    throw new Error(
+      `${sheetName} already exists with an unexpected schema. ` +
+      'Review that sheet before setup so no data is overwritten.',
+    );
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, requiredRows, 2).setValues(
+      [expectedHeaders].concat(PROJECT_ID_SUMMARY_STATUS_ORDERS),
+    );
+  }
+
+  sheet.getRange(1, 1, 1, 2)
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.HEADER_BACKGROUND)
+    .setFontColor(PROJECT_ID_SUMMARY_CONFIG.HEADER_FONT_COLOR)
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center');
+  sheet.setFrozenRows(1);
+  sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
+  sheet.setColumnWidth(1, 100);
+  sheet.setColumnWidth(2, 260);
+  return sheet;
+}
+
+function loadProjectIdSummaryStatusOrderLookup_(sheet) {
+  const values = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 1), 2)
+    .getValues();
+  const headers = values[0].map((value) => String(value).trim());
+  requireProjectIdSummaryHeader_(headers, 'Order', sheet.getName());
+  requireProjectIdSummaryHeader_(headers, 'Status', sheet.getName());
+  const lookup = new Map();
+  const usedOrders = new Set();
+  values.slice(1).forEach(([orderValue, statusValue], index) => {
+    const status = String(statusValue || '').trim();
+    if (!status && (orderValue === '' || orderValue == null)) return;
+    const order = Number(orderValue);
+    if (!status || !Number.isInteger(order) || order < 1) {
+      throw new Error(
+        `Invalid Order or Status in ${sheet.getName()} row ${index + 2}.`,
+      );
+    }
+    const key = status.toLowerCase();
+    if (lookup.has(key) || usedOrders.has(order)) {
+      throw new Error(
+        `Duplicate Order or Status in ${sheet.getName()} row ${index + 2}.`,
+      );
+    }
+    lookup.set(key, order);
+    usedOrders.add(order);
+  });
+  return lookup;
+}
+
+function buildDefaultProjectIdSummaryStatusOrderLookup_() {
+  return new Map(PROJECT_ID_SUMMARY_STATUS_ORDERS.map(
+    ([order, status]) => [status.toLowerCase(), order],
+  ));
+}
+
+function getProjectIdSummaryStatusOrder_(status, lookup) {
+  const key = String(status || '').trim().toLowerCase();
+  return key && lookup.has(key) ? lookup.get(key) : '';
+}
+
 function loadProjectIdSummaryStateRegionLookup_(sheet) {
   const values = sheet
     .getRange(1, 1, Math.max(sheet.getLastRow(), 1), 2)
@@ -1947,6 +2086,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -2144,6 +2287,20 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'calculated tolerance-range column. Existing Delta and PostHog values ' +
       'were shifted safely.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: Status Order was inserted after ' +
+      'Status. Existing Delta and PostHog values were shifted safely.',
+    );
   }
 
   sheet
@@ -2160,6 +2317,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   const categoryGroupColumn = PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
   const toleranceRangeColumn = PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
   const statusColumn = PROJECT_ID_SUMMARY_STATUS_INDEX + 1;
+  const statusOrderColumn = PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1;
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
     .getRange(
@@ -2209,6 +2367,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(categoryGroupColumn, 260);
   sheet.setColumnWidth(toleranceRangeColumn, 190);
   sheet.setColumnWidth(statusColumn, 150);
+  sheet.setColumnWidth(statusOrderColumn, 125);
   sheet.setColumnWidths(
     deltaStartColumn,
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
@@ -2450,6 +2609,11 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setNumberFormat('@')
     .setWrap(true);
+  sheet
+    .getRange(startRow, PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1, rowCount, 1)
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
+    .setNumberFormat('0')
+    .setHorizontalAlignment('center');
 
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
   sheet
