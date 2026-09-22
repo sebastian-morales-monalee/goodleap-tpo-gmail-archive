@@ -206,12 +206,23 @@ It:
   `Production Inside the Range`, `Production Outside the Range`, or `Without
   Production Data`; the latter includes blank tolerance results. Projects
   without a valid creation date are reported but cannot be placed in a week.
+- Adds `Weekly Project Creation` from the GoodLeap projects table in PostHog:
+  `Week` and `Projects Created`. It counts distinct Project IDs by `created_at`
+  in the America/Bogota Monday-to-Sunday week only when the current
+  `project_status` is nonblank. Drafts are excluded. The series starts on
+  August 17, 2026; earlier archive weeks have no creation comparator. A
+  nonblank current status does not establish when the project left draft.
+- Extends `Weekly Production Projects` with `Projects Created` and charts two
+  adjacent bars per week from August 17 onward: the existing three-color
+  rejected-project stack and a separate blue GoodLeap creation count. The
+  archive and all-GoodLeap populations are not expected to have equal totals.
 - Adds `Weekly Production Updated Projects` with the same status series and
   total, but groups each unique project by its header-located `Updated At`
   value. Projects without a valid update date are reported but cannot be
   placed in a week.
-- Displays one all-time chart, one two-series email chart, two three-series
-  project charts covering complete history, and—only when
+- Displays one all-time chart, one two-series email chart, a four-series
+  rejected-versus-created project chart, and a three-series updated-project
+  chart covering complete history, and—only when
   `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` is `true`—the eight most recent
   individual weekly charts and their supporting tables. The option defaults to
   `false`, leaving only the four consolidated charts visible and clearing the
@@ -229,7 +240,8 @@ It:
   recreated only when the visible set of weeks or the managed layout changes.
 - Records categorized rows with missing or invalid received dates in the
   all-time total and reports how many were excluded from weekly aggregation.
-- Does not call OpenAI, Gmail, Drive, or PostHog.
+- Does not call OpenAI, Gmail, or Drive. Its weekly creation count queries
+  GoodLeap through the configured PostHog connection.
 - Refreshes safely after each automatic OpenAI analysis check through the
   existing five-minute workflow; dashboard errors cannot fail email analysis.
 
@@ -945,18 +957,23 @@ No new Script Property or trigger is required.
 2. Replace `OpenAIAnalysis.gs` and `PostHogSync.gs` with the repository
    versions so `Project ID Summary` refreshes before the dashboard and PostHog
    project updates also refresh both weekly project charts.
-3. Save the Apps Script project.
+3. Ensure `PostHogSolarTables.gs` is also updated to the repository version and
+   the existing PostHog connection settings are configured. Save the Apps
+   Script project.
 4. Run `setupProjectIdSummary()` first and confirm that `Created At`, `Updated
    At`, and `Is tolerance into the range [-5%, +15%]` are populated as
    expected.
 5. Open `AIAnalysisDashboard.gs` and run `previewAIAnalysisDashboard()`.
-   Confirm the logged all-time, weekly category, and weekly project counts.
+   Confirm the logged all-time, weekly category, weekly project, and PostHog
+   weekly creation counts. The preview reads PostHog but does not write Sheets.
 6. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Weekly Summary`
    contains every historical week in long and wide formats, including the
-   Production-versus-other, `Weekly Production Projects`, and `Weekly
-   Production Updated Projects` matrices. Confirm that `AI Dashboard` contains
-   the all-time chart and all three stacked historical charts. The detailed
-   weekly tables and charts remain disabled by default. To restore them, set
+   Production-versus-other, `Weekly Production Projects`, `Weekly Production
+   Updated Projects`, and `Weekly Project Creation` matrices. Confirm that
+   `AI Dashboard` contains the all-time chart, the weekly email and
+   updated-project charts, and two adjacent bars per week from August 17 in
+   `Weekly Production Projects`. The detailed weekly tables and charts remain
+   disabled by default. To restore them, set
    `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` to `true` and rerun the setup.
 7. Optionally delete the manually created `Temporal` sheet after validation;
    the managed dashboard does not read or modify it.
@@ -1303,7 +1320,9 @@ stop all PostHog calls while keeping Gmail automation, run
   Categories by inspecting the multi-value `Categories` field. That two-series
   range drives the stacked email chart. It also classifies unique projects as
   inside, outside, or without production data and groups them independently
-  by `Created At` and `Updated At`. `AI Dashboard` shows one all-time and three
+  by `Created At` and `Updated At`. It also queries GoodLeap PostHog for weekly
+  counts of distinct created projects with a nonblank current status, starting
+  August 17, 2026. `AI Dashboard` shows one all-time and three
   stacked-history charts by default. Up to eight recent weekly detail charts
   appear only when `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` is enabled.
   Existing chart objects remain in place while only counts change within the

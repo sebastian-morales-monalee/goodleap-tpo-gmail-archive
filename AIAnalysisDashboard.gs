@@ -7,7 +7,8 @@
  * stacked weekly Production-versus-other trend based on Categories, two
  * stacked weekly project-production status charts (created and updated), plus
  * up to eight optional recent Primary Category charts in "AI Dashboard". It
- * does not call OpenAI, Gmail, Drive, or PostHog.
+ * does not call OpenAI, Gmail, or Drive. The project-creation comparison
+ * queries GoodLeap project counts through the existing PostHog connection.
  *
  * Safe first-run sequence:
  *   1) setupProjectIdSummary()
@@ -70,6 +71,12 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   PRODUCTION_PROJECTS_MATRIX_TITLE: 'Weekly Production Projects',
   UPDATED_PRODUCTION_PROJECTS_MATRIX_TITLE:
     'Weekly Production Updated Projects',
+  PROJECT_CREATION_MATRIX_TITLE: 'Weekly Project Creation',
+  PROJECT_CREATION_CHART_MATRIX_TITLE:
+    'Weekly Production Projects Chart Source',
+  PROJECT_CREATION_FIRST_WEEK: '2026-08-17',
+  PROJECT_CREATION_QUERY_LIMIT: 10000,
+  PROJECTS_CREATED_LABEL: 'Projects Created',
   PROJECT_SUMMARY_SHEET_NAME: 'Project ID Summary',
   PROJECT_ID_HEADER: 'Project ID',
   PROJECT_CREATED_AT_HEADER: 'Created At',
@@ -97,7 +104,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   PRODUCTION_PROJECTS_CHART_COLUMN: 25,
   UPDATED_PRODUCTION_PROJECTS_CHART_COLUMN: 35,
   LAYOUT_NOTE:
-    'Managed AI Dashboard layout v10: optional weekly Primary Category details plus labeled email, created-project, and updated-project Production trends.',
+    'Managed AI Dashboard layout v11: optional weekly Primary Category details plus labeled email, rejected-vs-created project, and updated-project Production trends.',
   HEADER_COLOR: '#6e04bd',
   HEADER_TEXT_COLOR: '#ffffff',
   CHART_COLOR: '#4285f4',
@@ -177,6 +184,9 @@ function previewAIAnalysisDashboard() {
       `withoutData=${week.withoutProductionDataCount} | ` +
       `total=${week.totalCount}`,
     );
+  });
+  Array.from(summary.projectCreation.entries()).forEach(([start, count]) => {
+    console.log(`[WEEKLY PROJECT CREATION] ${start} | created=${count}`);
   });
 
   const stats = buildAIAnalysisDashboardStats_(summary, null, null);
@@ -336,6 +346,7 @@ function loadAIAnalysisDashboardSummary_(spreadsheet) {
     spreadsheet,
     AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_UPDATED_AT_HEADER,
   );
+  const projectCreation = loadAIWeeklyProjectCreation_();
 
   assertAIAnalysisDashboardCapacity_(rows, weeks);
   return {
@@ -346,7 +357,71 @@ function loadAIAnalysisDashboardSummary_(spreadsheet) {
     excludedFromWeeklyCount,
     productionProjects,
     updatedProductionProjects,
+    projectCreation,
   };
+}
+
+function loadAIWeeklyProjectCreation_() {
+  if (typeof getPostHogSolarSettings_ !== 'function' ||
+      typeof executePostHogHogQL_ !== 'function') {
+    throw new Error(
+      'Weekly Project Creation requires PostHogSolarTables.gs and ' +
+      'PostHogSync.gs in the same Apps Script project.',
+    );
+  }
+  const settings = getPostHogSolarSettings_();
+  const weekStart = AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_FIRST_WEEK;
+  const queryLimit = AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_QUERY_LIMIT;
+  const query = [
+    'SELECT',
+    "  toString(toStartOfWeek(toTimeZone(created_at, 'America/Bogota'), 1)) " +
+      'AS week_start,',
+    `  uniqExact(${settings.projectIdField}) AS projects_created`,
+    `FROM ${settings.goodLeapProjectsTable}`,
+    // 05:00 UTC is midnight in America/Bogota on the first included Monday.
+    `WHERE created_at >= toDateTime('${weekStart} 05:00:00')`,
+    '  AND created_at <= now()',
+    `  AND project_status IS NOT NULL AND trim(project_status) != ''`,
+    `  AND ${settings.projectIdField} IS NOT NULL`,
+    `  AND trim(toString(${settings.projectIdField})) != ''`,
+    'GROUP BY week_start',
+    'ORDER BY week_start ASC',
+    `LIMIT ${queryLimit}`,
+  ].join('\n');
+  const response = executePostHogHogQL_(
+    query,
+    'goodleap_weekly_project_creation',
+  );
+  const columns = response.columns.map((column) =>
+    String(column).trim().toLowerCase(),
+  );
+  const weekIndex = columns.indexOf('week_start');
+  const countIndex = columns.indexOf('projects_created');
+  if (weekIndex < 0 || countIndex < 0) {
+    throw new Error(
+      'PostHog Weekly Project Creation response is missing week_start ' +
+      'or projects_created.',
+    );
+  }
+  if (response.results.length >= queryLimit) {
+    throw new Error(
+      `PostHog Weekly Project Creation reached its ${queryLimit}-week ` +
+      'safety limit. Increase the query limit before refreshing.',
+    );
+  }
+  const counts = new Map();
+  response.results.forEach((row) => {
+    const start = String(row[weekIndex] || '').slice(0, 10);
+    const count = Number(row[countIndex]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) ||
+        start < weekStart || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error(
+        `Invalid PostHog Weekly Project Creation row: ${JSON.stringify(row)}`,
+      );
+    }
+    counts.set(start, count);
+  });
+  return counts;
 }
 
 function loadAIWeeklyProductionProjects_(spreadsheet, dateHeader) {
@@ -654,10 +729,45 @@ function buildAIWeeklyChartMatrix_(summary, matrix) {
 }
 
 function buildAIWeeklyProductionProjectsMatrix_(summary, chartMatrix) {
-  return buildAIWeeklyProjectStatusMatrix_(
+  const matrix = buildAIWeeklyProjectStatusMatrix_(
     summary.productionProjects,
     chartMatrix.startColumn + chartMatrix.headers.length + 1,
   );
+  const rejectedByWeek = new Map(matrix.rows.map((row) => [
+    row[0].slice(0, 10), row,
+  ]));
+  const starts = new Set([
+    ...rejectedByWeek.keys(),
+    ...summary.projectCreation.keys(),
+  ]);
+  const firstWeek = AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_FIRST_WEEK;
+  let start = firstWeek;
+  const currentWeek = getAIAnalysisWeekBounds_(new Date()).start;
+  while (start <= currentWeek) {
+    starts.add(start);
+    start = nextAIAnalysisWeekStart_(start);
+  }
+  matrix.headers.push(AI_ANALYSIS_DASHBOARD_CONFIG.PROJECTS_CREATED_LABEL);
+  matrix.rows = Array.from(starts).sort().map((weekStart) => {
+    const rejected = rejectedByWeek.get(weekStart);
+    const bounds = getAIAnalysisWeekBounds_(
+      new Date(`${weekStart}T12:00:00-05:00`),
+    );
+    return (rejected || [
+      `${bounds.start} to ${bounds.end}`, 0, 0, 0, 0,
+    ]).concat([
+      weekStart < firstWeek
+        ? ''
+        : Number(summary.projectCreation.get(weekStart) || 0),
+    ]);
+  });
+  return matrix;
+}
+
+function nextAIAnalysisWeekStart_(start) {
+  const next = new Date(`${start}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 7);
+  return Utilities.formatDate(next, 'UTC', 'yyyy-MM-dd');
 }
 
 function buildAIWeeklyUpdatedProductionProjectsMatrix_(
@@ -670,6 +780,54 @@ function buildAIWeeklyUpdatedProductionProjectsMatrix_(
       productionProjectsMatrix.headers.length +
       1,
   );
+}
+
+function buildAIWeeklyProjectCreationMatrix_(summary, updatedMatrix) {
+  const firstWeek = AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_FIRST_WEEK;
+  const currentWeek = getAIAnalysisWeekBounds_(new Date()).start;
+  const rows = [];
+  let start = firstWeek;
+  while (start <= currentWeek) {
+    const bounds = getAIAnalysisWeekBounds_(
+      new Date(`${start}T12:00:00-05:00`),
+    );
+    rows.push([
+      `${bounds.start} to ${bounds.end}`,
+      Number(summary.projectCreation.get(start) || 0),
+    ]);
+    start = nextAIAnalysisWeekStart_(start);
+  }
+  return {
+    headers: ['Week', AI_ANALYSIS_DASHBOARD_CONFIG.PROJECTS_CREATED_LABEL],
+    rows,
+    startColumn: updatedMatrix.startColumn + updatedMatrix.headers.length + 1,
+  };
+}
+
+function buildAIWeeklyProductionProjectsChartMatrix_(
+  productionMatrix,
+  creationMatrix,
+) {
+  const firstWeek = AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_FIRST_WEEK;
+  const rows = [];
+  productionMatrix.rows.forEach((row) => {
+    const start = row[0].slice(0, 10);
+    rows.push([`${start} (Rejected)`, row[1], row[2], row[3], '']);
+    if (start >= firstWeek) {
+      rows.push([`${start} (Created)`, '', '', '', row[5]]);
+    }
+  });
+  return {
+    headers: [
+      'Week and group',
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_INSIDE_RANGE_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_OUTSIDE_RANGE_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_WITHOUT_DATA_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECTS_CREATED_LABEL,
+    ],
+    rows,
+    startColumn: creationMatrix.startColumn + creationMatrix.headers.length + 1,
+  };
 }
 
 function buildAIWeeklyProjectStatusMatrix_(projectSummary, startColumn) {
@@ -717,6 +875,15 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
       summary,
       productionProjectsMatrix,
     );
+  const projectCreationMatrix = buildAIWeeklyProjectCreationMatrix_(
+    summary,
+    updatedProductionProjectsMatrix,
+  );
+  const productionProjectsChartMatrix =
+    buildAIWeeklyProductionProjectsChartMatrix_(
+      productionProjectsMatrix,
+      projectCreationMatrix,
+    );
   if (
     !force &&
     doesAIWeeklySummaryMatch_(
@@ -726,6 +893,8 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
       chartMatrix,
       productionProjectsMatrix,
       updatedProductionProjectsMatrix,
+      projectCreationMatrix,
+      productionProjectsChartMatrix,
     )
   ) {
     return {
@@ -742,6 +911,7 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
       updatedProductionProjectsMatrixRows:
         updatedProductionProjectsMatrix.rows.length,
       updatedProductionProjectsMatrixSeries: 3,
+      projectCreationMatrixRows: projectCreationMatrix.rows.length,
     };
   }
 
@@ -753,10 +923,8 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
     AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_MATRIX_START_COLUMN +
     matrix.headers.length -
     1;
-  const updatedProductionProjectsMatrixLastColumn =
-    updatedProductionProjectsMatrix.startColumn +
-    updatedProductionProjectsMatrix.headers.length -
-    1;
+  const lastMatrixColumn = productionProjectsChartMatrix.startColumn +
+    productionProjectsChartMatrix.headers.length - 1;
   ensureAIAnalysisSheetCapacity_(
     sheet,
     Math.max(
@@ -765,8 +933,10 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
       chartMatrix.rows.length + 3,
       productionProjectsMatrix.rows.length + 3,
       updatedProductionProjectsMatrix.rows.length + 3,
+      projectCreationMatrix.rows.length + 3,
+      productionProjectsChartMatrix.rows.length + 3,
     ),
-    updatedProductionProjectsMatrixLastColumn + 1,
+    lastMatrixColumn + 1,
   );
   sheet.setHiddenGridlines(false);
   sheet.setFrozenRows(1);
@@ -894,6 +1064,16 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
     updatedProductionProjectsMatrix,
     AI_ANALYSIS_DASHBOARD_CONFIG.UPDATED_PRODUCTION_PROJECTS_MATRIX_TITLE,
   );
+  writeAIWeeklyProjectStatusMatrix_(
+    sheet,
+    projectCreationMatrix,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_MATRIX_TITLE,
+  );
+  writeAIWeeklyProjectStatusMatrix_(
+    sheet,
+    productionProjectsChartMatrix,
+    AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_CHART_MATRIX_TITLE,
+  );
   return {
     sheet: sheet.getName(),
     updated: true,
@@ -908,6 +1088,7 @@ function writeAIWeeklySummary_(spreadsheet, summary, force) {
     updatedProductionProjectsMatrixRows:
       updatedProductionProjectsMatrix.rows.length,
     updatedProductionProjectsMatrixSeries: 3,
+    projectCreationMatrixRows: projectCreationMatrix.rows.length,
   };
 }
 
@@ -947,8 +1128,10 @@ function writeAIWeeklyProjectStatusMatrix_(sheet, matrix, title) {
       .setNumberFormat('0');
   }
   sheet.setColumnWidth(matrix.startColumn, 220);
-  sheet.setColumnWidths(matrix.startColumn + 1, 3, 190);
-  sheet.setColumnWidth(lastColumn, 100);
+  if (matrix.headers.length > 2) {
+    sheet.setColumnWidths(matrix.startColumn + 1, matrix.headers.length - 2, 190);
+  }
+  sheet.setColumnWidth(lastColumn, matrix.headers.length === 2 ? 160 : 130);
 }
 
 function doesAIWeeklySummaryMatch_(
@@ -958,6 +1141,8 @@ function doesAIWeeklySummaryMatch_(
   chartMatrix,
   productionProjectsMatrix,
   updatedProductionProjectsMatrix,
+  projectCreationMatrix,
+  productionProjectsChartMatrix,
 ) {
   if (sheet.getLastRow() < 1 || sheet.getLastColumn() < 6) {
     return false;
@@ -1004,6 +1189,16 @@ function doesAIWeeklySummaryMatch_(
       sheet,
       updatedProductionProjectsMatrix,
       AI_ANALYSIS_DASHBOARD_CONFIG.UPDATED_PRODUCTION_PROJECTS_MATRIX_TITLE,
+    ) &&
+    doesAIWeeklyProjectStatusMatrixMatch_(
+      sheet,
+      projectCreationMatrix,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_MATRIX_TITLE,
+    ) &&
+    doesAIWeeklyProjectStatusMatrixMatch_(
+      sheet,
+      productionProjectsChartMatrix,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_CHART_MATRIX_TITLE,
     )
   );
 }
@@ -1208,6 +1403,15 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
       summary,
       productionProjectsMatrix,
     );
+  const projectCreationMatrix = buildAIWeeklyProjectCreationMatrix_(
+    summary,
+    updatedProductionProjectsMatrix,
+  );
+  const productionProjectsChartMatrix =
+    buildAIWeeklyProductionProjectsChartMatrix_(
+      productionProjectsMatrix,
+      projectCreationMatrix,
+    );
   const layoutMatches = doesAIAnalysisDashboardLayoutMatch_(
     sheet,
     summary,
@@ -1215,6 +1419,7 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     matrix,
     productionProjectsMatrix,
     updatedProductionProjectsMatrix,
+    productionProjectsChartMatrix,
   );
   if (
     !force &&
@@ -1244,6 +1449,7 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     matrix,
     productionProjectsMatrix,
     updatedProductionProjectsMatrix,
+    productionProjectsChartMatrix,
   );
   if (rebuildLayout) {
     insertAIAnalysisDashboardCharts_(
@@ -1254,6 +1460,7 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
       matrix,
       productionProjectsMatrix,
       updatedProductionProjectsMatrix,
+      productionProjectsChartMatrix,
     );
   }
   SpreadsheetApp.flush();
@@ -1320,6 +1527,7 @@ function writeAIAnalysisDashboardValues_(
   matrix,
   productionProjectsMatrix,
   updatedProductionProjectsMatrix,
+  productionProjectsChartMatrix,
 ) {
   sheet
     .getRange('A1')
@@ -1329,6 +1537,7 @@ function writeAIAnalysisDashboardValues_(
         matrix,
         productionProjectsMatrix,
         updatedProductionProjectsMatrix,
+        productionProjectsChartMatrix,
       ),
     );
   sheet.getRange('A2').setValue('Updated At').setFontWeight('bold');
@@ -1416,6 +1625,7 @@ function insertAIAnalysisDashboardCharts_(
   matrix,
   productionProjectsMatrix,
   updatedProductionProjectsMatrix,
+  productionProjectsChartMatrix,
 ) {
   if (summary.rows.length > 0) {
     insertAIAnalysisCategoryChart_(
@@ -1427,7 +1637,7 @@ function insertAIAnalysisDashboardCharts_(
   }
   if (
     matrix.rows.length > 0 ||
-    productionProjectsMatrix.rows.length > 0 ||
+    productionProjectsChartMatrix.rows.length > 0 ||
     updatedProductionProjectsMatrix.rows.length > 0
   ) {
     const weeklySheet = spreadsheet.getSheetByName(
@@ -1445,13 +1655,14 @@ function insertAIAnalysisDashboardCharts_(
         buildAIWeeklyChartMatrix_(summary, matrix),
       );
     }
-    if (productionProjectsMatrix.rows.length > 0) {
+    if (productionProjectsChartMatrix.rows.length > 0) {
       insertAIWeeklyProjectStatusChart_(
         sheet,
         weeklySheet,
-        productionProjectsMatrix,
+        productionProjectsChartMatrix,
         AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE,
         AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_CHART_COLUMN,
+        true,
       );
     }
     if (updatedProductionProjectsMatrix.rows.length > 0) {
@@ -1591,18 +1802,20 @@ function insertAIWeeklyProjectStatusChart_(
   matrix,
   title,
   chartColumn,
+  includeCreatedProjects,
 ) {
   const chartRange = weeklySheet.getRange(
     2,
     matrix.startColumn,
     matrix.rows.length + 1,
-    4,
+    includeCreatedProjects ? 5 : 4,
   );
   const colors = [
     AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_INSIDE_RANGE_COLOR,
     AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_OUTSIDE_RANGE_COLOR,
     AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_WITHOUT_DATA_COLOR,
   ];
+  if (includeCreatedProjects) colors.push('#5b8def');
   const series = {};
   colors.forEach((color, index) => {
     series[index] = {
@@ -1668,6 +1881,7 @@ function doesAIAnalysisDashboardLayoutMatch_(
   matrix,
   productionProjectsMatrix,
   updatedProductionProjectsMatrix,
+  productionProjectsChartMatrix,
 ) {
   if (sheet.getLastRow() < 4 || sheet.getLastColumn() < 4) {
     return false;
@@ -1678,6 +1892,7 @@ function doesAIAnalysisDashboardLayoutMatch_(
       matrix,
       productionProjectsMatrix,
       updatedProductionProjectsMatrix,
+      productionProjectsChartMatrix,
     )
   ) {
     return false;
@@ -1778,7 +1993,9 @@ function expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks) {
   return (
     (summary.rows.length > 0 ? 1 : 0) +
     (summary.weeks.length > 0 ? 1 : 0) +
-    (summary.productionProjects.weeks.length > 0 ? 1 : 0) +
+    (summary.productionProjects.weeks.length > 0 ||
+      getAIAnalysisWeekBounds_(new Date()).start >=
+        AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_FIRST_WEEK ? 1 : 0) +
     (summary.updatedProductionProjects.weeks.length > 0 ? 1 : 0) +
     visibleWeeks.length
   );
@@ -1788,6 +2005,7 @@ function buildAIAnalysisDashboardLayoutNote_(
   matrix,
   productionProjectsMatrix,
   updatedProductionProjectsMatrix,
+  productionProjectsChartMatrix,
 ) {
   const weekSignature = matrix.rows.map((row) => row[0]).join('|');
   const categorySignature = matrix.categories.join('|');
@@ -1797,6 +2015,12 @@ function buildAIAnalysisDashboardLayoutNote_(
   const updatedProjectWeekSignature = updatedProductionProjectsMatrix.rows
     .map((row) => row[0])
     .join('|');
+  const comparisonRows = productionProjectsChartMatrix.rows;
+  const comparisonWeekSignature = [
+    comparisonRows.length,
+    comparisonRows.length ? comparisonRows[0][0] : '',
+    comparisonRows.length ? comparisonRows[comparisonRows.length - 1][0] : '',
+  ].join('|');
   return (
     `${AI_ANALYSIS_DASHBOARD_CONFIG.LAYOUT_NOTE}\n` +
     `Weekly detail enabled: ${
@@ -1805,7 +2029,8 @@ function buildAIAnalysisDashboardLayoutNote_(
     `Weeks: ${weekSignature}\n` +
     `Categories: ${categorySignature}\n` +
     `Project weeks: ${projectWeekSignature}\n` +
-    `Updated project weeks: ${updatedProjectWeekSignature}`
+    `Updated project weeks: ${updatedProjectWeekSignature}\n` +
+    `Rejected vs created weeks: ${comparisonWeekSignature}`
   );
 }
 
@@ -1881,7 +2106,14 @@ function buildAIAnalysisDashboardStats_(summary, weeklyStats, dashboardStats) {
       AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_INSIDE_RANGE_LABEL,
       AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_OUTSIDE_RANGE_LABEL,
       AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_WITHOUT_DATA_LABEL,
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECTS_CREATED_LABEL,
     ],
+    projectCreationFirstWeek:
+      AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_FIRST_WEEK,
+    projectCreationWeeksWithProjects: summary.projectCreation.size,
+    projectsCreatedSinceFirstWeek: Array.from(
+      summary.projectCreation.values(),
+    ).reduce((total, count) => total + count, 0),
     productionProjectHistoricalWeeks:
       summary.productionProjects.weeks.length,
     productionProjects: summary.productionProjects.totalProjects,
