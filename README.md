@@ -215,7 +215,11 @@ It:
 - Extends `Weekly Production Projects` with `Projects Created` and charts two
   adjacent bars per week from August 17 onward: the existing three-color
   rejected-project stack and a separate blue GoodLeap creation count. The
-  archive and all-GoodLeap populations are not expected to have equal totals.
+  rejected-project stack uses the left vertical axis; `Projects Created` uses
+  the right vertical axis so both remain legible at different scales. Created
+  projects include rejected projects, so the series are not disjoint and bar
+  heights on the two axes should not be compared directly. The archive and
+  all-GoodLeap populations are not expected to have equal totals.
 - Adds `Weekly Production Updated Projects` with the same status series and
   total, but groups each unique project by its header-located `Updated At`
   value. Projects without a valid update date are reported but cannot be

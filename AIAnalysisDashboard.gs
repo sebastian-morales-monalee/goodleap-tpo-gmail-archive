@@ -104,7 +104,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   PRODUCTION_PROJECTS_CHART_COLUMN: 25,
   UPDATED_PRODUCTION_PROJECTS_CHART_COLUMN: 35,
   LAYOUT_NOTE:
-    'Managed AI Dashboard layout v11: optional weekly Primary Category details plus labeled email, rejected-vs-created project, and updated-project Production trends.',
+    'Managed AI Dashboard layout v12: optional weekly Primary Category details plus labeled email, dual-axis rejected-vs-created project, and updated-project Production trends.',
   HEADER_COLOR: '#6e04bd',
   HEADER_TEXT_COLOR: '#ffffff',
   CHART_COLOR: '#4285f4',
@@ -1831,7 +1831,10 @@ function insertAIWeeklyProjectStatusChart_(
       },
     };
   });
-  const chart = dashboardSheet
+  if (includeCreatedProjects) {
+    series[3].targetAxisIndex = 1;
+  }
+  const chartBuilder = dashboardSheet
     .newChart()
     .asColumnChart()
     .addRange(chartRange)
@@ -1853,13 +1856,20 @@ function insertAIWeeklyProjectStatusChart_(
       title: 'Week',
       slantedText: true,
       slantedTextAngle: 30,
-    })
-    .setOption('vAxis', {
+    });
+  if (includeCreatedProjects) {
+    chartBuilder.setOption('vAxes', {
+      0: {title: 'Rejected Projects', minValue: 0, format: '0'},
+      1: {title: 'Projects Created', minValue: 0, format: '0'},
+    });
+  } else {
+    chartBuilder.setOption('vAxis', {
       title: 'Projects',
       minValue: 0,
       format: '0',
-    })
-    .build();
+    });
+  }
+  const chart = chartBuilder.build();
   dashboardSheet.insertChart(chart);
 }
 
