@@ -2,8 +2,9 @@
  * GoodLeap TPO - one-category project explorer.
  *
  * This file belongs in the same Apps Script project as ProjectIdSummary.gs
- * and OpenAIAnalysis.gs. The explorer reads Project ID Summary only; changing
- * its selector never calls OpenAI or rebuilds the project summary.
+ * and OpenAIAnalysis.gs. The explorer reads Project ID Summary and joins the
+ * stored Google Group URL from Emails by Gmail Message ID. Changing its
+ * selector never calls OpenAI or rebuilds the project summary.
  */
 
 const CATEGORY_EXPLORER_CONFIG = {
@@ -16,13 +17,19 @@ const CATEGORY_EXPLORER_CONFIG = {
   TAB_COLOR: '#7200c9',
   FIRST_RESULT_ROW: 8,
   RESULT_HEADERS: [
+    'AI Summary',
+    'Categories',
+    'Email Count',
+    'Last Email Received At',
+    'Google Group URL',
+    'Installer',
+    'State',
+    'Region',
+    'Status',
+    'Project URL',
     'Project ID',
     'Application ID',
-    'Project URL',
-    'Categories',
-    'Status',
-    'Region',
-    'AI Summary',
+    'Gmail Message ID',
   ],
 };
 
@@ -45,9 +52,21 @@ function setupCategoryExplorer() {
   const headers = source.getRange(1, 1, 1, source.getLastColumn())
     .getDisplayValues()[0].map((value) => String(value).trim());
   const required = CATEGORY_EXPLORER_CONFIG.RESULT_HEADERS;
-  required.forEach((header) => {
+  required.filter((header) => header !== 'Google Group URL').forEach((header) => {
     if (headers.indexOf(header) < 0) {
       throw new Error('Project ID Summary is missing the ' + header + ' column.');
+    }
+  });
+
+  const emails = spreadsheet.getSheetByName('Emails');
+  if (!emails || emails.getLastColumn() === 0) {
+    throw new Error('Emails is missing. Run setupGoodLeapArchive() first.');
+  }
+  const emailHeaders = emails.getRange(1, 1, 1, emails.getLastColumn())
+    .getDisplayValues()[0].map((value) => String(value).trim());
+  ['Gmail Message ID', 'Google Group URL'].forEach((header) => {
+    if (emailHeaders.indexOf(header) < 0) {
+      throw new Error('Emails is missing the ' + header + ' column.');
     }
   });
 
@@ -56,7 +75,7 @@ function setupCategoryExplorer() {
   if (!sheet) sheet = spreadsheet.insertSheet(config.SHEET_NAME);
 
   const existingTitle = String(sheet.getRange('A1').getDisplayValue()).trim();
-  const existingHeaders = sheet.getRange('A7:G7').getDisplayValues()[0]
+  const existingHeaders = sheet.getRange('A7:M7').getDisplayValues()[0]
     .map((value) => String(value).trim());
   if (
     (existingTitle && existingTitle !== config.SHEET_NAME) ||
@@ -66,6 +85,18 @@ function setupCategoryExplorer() {
       'Category Explorer already has an unexpected layout. Review it before ' +
       'running setup so existing data is not overwritten.',
     );
+  }
+  if (sheet.getLastRow() >= config.FIRST_RESULT_ROW) {
+    const trailingValues = sheet.getRange(
+      config.FIRST_RESULT_ROW, 8,
+      sheet.getLastRow() - config.FIRST_RESULT_ROW + 1, 6,
+    ).getDisplayValues();
+    if (trailingValues.some((row) => row.some((value) => value !== '')) &&
+        !existingHeaders.every((value, index) => value === required[index])) {
+      throw new Error(
+        'Category Explorer has data in H:M. Review it before upgrading the view.',
+      );
+    }
   }
 
   // Reserve only the rows needed for the same 5,000-project limit used by the
@@ -93,24 +124,25 @@ function setupCategoryExplorer() {
   sheet.getRange('A3').setValue('Category');
   sheet.getRange('D3').setValue('Projects found');
   sheet.getRange('A5').setValue('Source: latest email categories');
-  sheet.getRange('A7:G7').setValues([required]);
+  sheet.getRange('A7:M7').setValues([required]);
   sheet.getRange('E3').setFormula(
-    '=IF($B$3="","",COUNTIF($A$8:$A,"?*"))',
+    '=IF($B$3="","",COUNTIF($K$8:$K,"?*"))',
   );
   sheet.getRange('A8').setFormula(
     buildCategoryExplorerFilterFormula_(
       headers,
       config.SOURCE_SHEET_NAME,
       maxProjects + 1,
+      emailHeaders,
     ),
   );
 
-  sheet.getRange('A1:G1')
+  sheet.getRange('A1:M1')
     .setBackground(config.HEADER_BACKGROUND)
     .setFontColor(config.HEADER_FONT_COLOR)
     .setFontWeight('bold')
     .setFontSize(14);
-  sheet.getRange('A7:G7')
+  sheet.getRange('A7:M7')
     .setBackground(config.HEADER_BACKGROUND)
     .setFontColor(config.HEADER_FONT_COLOR)
     .setFontWeight('bold')
@@ -119,12 +151,14 @@ function setupCategoryExplorer() {
     .setWrap(true);
   selector.setBackground(config.INPUT_BACKGROUND);
   sheet.getRange('E3').setFontWeight('bold');
-  sheet.getRange('D8:D' + lastResultRow).setWrap(true);
-  sheet.getRange('G8:G' + lastResultRow).setWrap(true);
+  sheet.getRange('A8:B' + lastResultRow).setWrap(true);
+  sheet.getRange('D8:D' + lastResultRow)
+    .setNumberFormat('yyyy-mm-dd hh:mm:ss');
   sheet.setFrozenRows(7);
   sheet.setFrozenColumns(1);
   sheet.setTabColor(config.TAB_COLOR);
-  [280, 220, 450, 320, 190, 140, 550].forEach((width, index) => {
+  [550, 320, 130, 190, 450, 180, 100, 140, 190, 450, 280, 220, 220]
+    .forEach((width, index) => {
     sheet.setColumnWidth(index + 1, width);
   });
   sheet.setRowHeight(1, 32);
@@ -140,19 +174,23 @@ function setupCategoryExplorer() {
   return result;
 }
 
-/** Accepts an empty tab, the previous six-column view, or the current view. */
+/** Accepts an empty tab, either legacy view, or the current view. */
 function categoryExplorerHasCompatibleHeaders_(existing, required) {
   if (existing.every((value) => !value)) return true;
-  const previous = required.slice(0, -1);
-  const matchesPrevious = previous.every((value, index) =>
-    existing[index] === value) && !existing[previous.length];
-  const matchesCurrent = required.every((value, index) =>
-    existing[index] === value);
-  return matchesPrevious || matchesCurrent;
+  const legacySix = [
+    'Project ID', 'Application ID', 'Project URL',
+    'Categories', 'Status', 'Region',
+  ];
+  const layouts = [legacySix, legacySix.concat('AI Summary'), required];
+  return layouts.some((layout) =>
+    layout.every((value, index) => existing[index] === value) &&
+    existing.slice(layout.length).every((value) => !value));
 }
 
 /** Builds an exact, semicolon-delimited category filter for Google Sheets. */
-function buildCategoryExplorerFilterFormula_(headers, sourceSheetName, endRow) {
+function buildCategoryExplorerFilterFormula_(
+  headers, sourceSheetName, endRow, emailHeaders,
+) {
   const escapedName = String(sourceSheetName).replace(/'/g, "''");
   const sourceName = "'" + escapedName + "'";
   const rangeFor = (header) => {
@@ -161,7 +199,21 @@ function buildCategoryExplorerFilterFormula_(headers, sourceSheetName, endRow) {
     const letter = categoryExplorerColumnLetter_(index + 1);
     return sourceName + '!$' + letter + '$2:$' + letter + '$' + endRow;
   };
-  const resultRanges = CATEGORY_EXPLORER_CONFIG.RESULT_HEADERS.map(rangeFor);
+  const emailIdIndex = emailHeaders.indexOf('Gmail Message ID');
+  const groupUrlIndex = emailHeaders.indexOf('Google Group URL');
+  if (emailIdIndex < 0 || groupUrlIndex < 0) {
+    throw new Error('Emails must include Gmail Message ID and Google Group URL.');
+  }
+  const emailIds = "'Emails'!$" + categoryExplorerColumnLetter_(emailIdIndex + 1) + '$2:$' +
+    categoryExplorerColumnLetter_(emailIdIndex + 1);
+  const groupUrls = "'Emails'!$" + categoryExplorerColumnLetter_(groupUrlIndex + 1) + '$2:$' +
+    categoryExplorerColumnLetter_(groupUrlIndex + 1);
+  const messageIds = rangeFor('Gmail Message ID');
+  const groupUrlLookup = 'ARRAYFORMULA(IF(' + messageIds +
+    '= "","",IFNA(VLOOKUP(' + messageIds + ',{' + emailIds + ',' +
+    groupUrls + '},2,FALSE),"")))';
+  const resultRanges = CATEGORY_EXPLORER_CONFIG.RESULT_HEADERS.map((header) =>
+    header === 'Google Group URL' ? groupUrlLookup : rangeFor(header));
   const projectIds = rangeFor('Project ID');
   const categories = rangeFor('Categories');
   const tokenPattern = '"(^|;\\s*)"&$B$3&"(\\s*;|$)"';

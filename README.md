@@ -1082,14 +1082,20 @@ No new Script Property or trigger is required.
 ### Adding Category Explorer to an existing installation
 
 Add or update `CategoryExplorer.gs` in the same Apps Script project and run
-`setupCategoryExplorer()`. This also upgrades an existing six-column explorer
-without changing its selected category. It requires an existing `Project ID
-Summary` with `Project ID`, `Application ID`, `Project URL`, `Categories`,
-`Status`, `Region`, and `AI Summary`. If that sheet has not been initialized,
-run `setupProjectIdSummary()` first. The new tab starts with `Production`
-selected; choose any single category in `Category Explorer!B3` to update
-the matching project list and the count in `E3` immediately. The results show
-the seven source fields above, including the latest `AI Summary` in column G.
+`setupCategoryExplorer()`. This upgrades either older six- or seven-column
+explorer without changing its selected category. It requires an existing
+`Project ID Summary` and `Emails` tab (created by `setupGoodLeapArchive()`).
+If the summary has not been initialized, run `setupProjectIdSummary()` first.
+The new tab starts with `Production` selected; choose any single category in
+`Category Explorer!B3` to update the matching project list and count in `E3`
+immediately. The result columns are `AI Summary`, `Categories`, `Email Count`,
+`Last Email Received At`, `Google Group URL`, `Installer`, `State`, `Region`,
+`Status`, `Project URL`, `Project ID`, `Application ID`, and `Gmail Message ID`.
+The Google Group URL is looked up in `Emails` by the summary row's Gmail Message
+ID; it stays blank if that message or URL is unavailable. That message ID is
+for the latest *analyzed* email, which may be older than `Last Email Received
+At` when analysis is pending. The count uses Project ID rather than AI Summary,
+so blank summaries do not reduce it.
 Matching checks complete category names separated by semicolons, so `Other`
 does not match a longer label containing that word.
 
