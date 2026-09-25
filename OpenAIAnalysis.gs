@@ -27,6 +27,7 @@ const OPENAI_ANALYSIS_CONFIG = {
   MAX_BATCH_SIZE: 20,
   DEFAULT_MAX_EMAIL_CHARACTERS: 30000,
   MAX_OUTPUT_TOKENS: 2200,
+  CATEGORY_RULES_VERSION: '2026-09-25-all-categories-v2',
 };
 
 const OPENAI_ANALYSIS_PROPERTY_KEYS = {
@@ -62,10 +63,13 @@ const OPENAI_ANALYSIS_HEADERS = [
   'Analysis Status',
   'Error',
   'Sunhours Checked At',
+  'Category Rules Version',
 ];
 
-const PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS =
+const PRE_CATEGORY_RULES_OPENAI_ANALYSIS_HEADERS =
   OPENAI_ANALYSIS_HEADERS.slice(0, -1);
+const PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS =
+  PRE_CATEGORY_RULES_OPENAI_ANALYSIS_HEADERS.slice(0, -1);
 const LEGACY_OPENAI_ANALYSIS_HEADERS = PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.filter(
   (header) => header !== 'Project ID',
 );
@@ -107,8 +111,19 @@ const OPENAI_ANALYSIS_INSTRUCTIONS = [
   'Do not infer facts, measurements, production values, or requirements that are not explicit in the email.',
   'Use null for an absent numeric value and an empty array for an absent list.',
   'Return concise English text even if the source contains another language.',
-  'Choose every applicable category, but choose exactly one primary category.',
-  'Use Sun Hours when the newest message discusses sunhours, sun hours, sun-hours, solar exposure hours, or an equivalent sun-hour measurement; do not infer it from unrelated production or shading discussion.',
+  'Classify the substantive topics in the newest message body from scratch. Do not carry categories, rejection reasons, or next steps forward from earlier emails, quoted replies, signatures, a repeated subject line, or archive metadata.',
+  'Choose every category directly supported by the newest message and exactly one primary category for its main purpose. A category can be present whether its issue is open, corrected, or being clarified, but not solely because of incidental terminology.',
+  'Production: an explicit production-yield or benchmark discrepancy, out-of-tolerance result, failed production validation, or a direct request to calculate, recheck, or revise production. A kWh number, generic production subject, within-tolerance statement, or provisional estimate with compliance unverified only because a design or documents are pending does not by itself qualify.',
+  'Layout: a substantive array or panel placement, panel count per roof plane or azimuth, roof design, orientation, tilt, or proposed-versus-installed layout mismatch or change. A generic mention of a proposal or design is insufficient; an unfinished revised layout that must be finalized does qualify.',
+  'Equipment: a substantive issue or change involving a named panel, inverter, module, battery, model, part type, electrical component, or its required count or compatibility. Do not use Equipment for generic installation photos, panels merely being repositioned, or the word system.',
+  'Shading / Site Conditions: a substantive concern or action involving trees, obstructions, shade assumptions, LiDAR shading, site conditions, or their representation in the design. Do not infer it solely from a shade-report link or from a Sun Hours measurement with no shading/site topic.',
+  'Structure: a substantive roof or supporting-structure eligibility, load, integrity, engineering, or construction concern. Ordinary roof-plane placement or panel tilt/layout alone is Layout, not Structure.',
+  'Documentation: required, missing, requested, submitted, corrected, or insufficient documents, forms, signatures, audit trails, photographs, or other evidence. An explicit missing-document or missing-installation-photo requirement must include Documentation, even if another topic is also discussed. A generic reference to a portal or proposal tool is not enough.',
+  'Offset: a substantive solar-to-consumption offset percentage, offset threshold, consumer-agreement offset, or offset acknowledgment requirement. Do not use Offset for any other sense of the word or merely because an Offset Acknowledgement form is mentioned without discussing the offset itself.',
+  'Communication / Follow-up: a substantive status inquiry, request for a new review or clarification, project identification question, ticket merge, acknowledgment, or coordination message. Do not add it just for a greeting, standard please-reply footer, or the ordinary instruction to upload a document or update a design.',
+  'Sun Hours: an explicit sunhours, sun hours, sun-hours, or equivalent solar-exposure-hours measurement, requirement, or discussion. Do not infer it from unrelated production, shade-report links, or generic shading discussion.',
+  'Other: only when none of the named categories is supported by the newest body. Never combine Other with a named category.',
+  'Examples: "production is within tolerance; please send installation photos" is Documentation only. "Production is outside tolerance; panel counts by azimuth differ" is Production and Layout. "The revised layout is not finalized and required photos are missing; production compliance cannot yet be verified" is Layout and Documentation, not Production or Equipment. "The offset exceeds 110%; submit an acknowledgment form" is Offset and Documentation, not Production unless a separate production discrepancy is stated.',
   'Rejection reasons must describe the concrete issue stated in the email.',
   'Steps to clear must describe explicit or directly supported next actions.',
   'Set requires_human_review to true for ambiguity, conflicting values, missing context, or high-impact technical judgment.',
@@ -328,6 +343,88 @@ function backfillLatestProjectEmailCategories() {
   }
 }
 
+/**
+ * Reanalyzes the latest archived email for each project under the current
+ * category rules. Successful rows are versioned so repeated runs only process
+ * remaining projects. Each run is bounded by the configured batch size.
+ */
+function reclassifyLatestProjectEmailsWithOpenAI() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return {skippedBecauseLocked: true};
+  try {
+    const settings = getOpenAIAnalysisSettings_();
+    const spreadsheet = getOrCreateResources_().spreadsheet;
+    const sheet = getOrCreateOpenAIAnalysisSheet_(spreadsheet);
+    const projectIds = loadAnalysisProjectIdMap_(spreadsheet);
+    const values = sheet.getLastRow() > 1
+      ? sheet.getRange(2, 1, sheet.getLastRow() - 1,
+        OPENAI_ANALYSIS_HEADERS.length).getValues()
+      : [];
+    const existing = new Map();
+    const messageIdIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Gmail Message ID');
+    const statusIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Analysis Status');
+    const versionIndex = OPENAI_ANALYSIS_HEADERS.indexOf(
+      'Category Rules Version',
+    );
+    values.forEach((row, offset) => {
+      const messageId = String(row[messageIdIndex] || '').trim();
+      if (messageId) existing.set(messageId, {row, rowNumber: offset + 2});
+    });
+
+    const latestByProject = loadLatestOpenAIProjectEmailCandidates_(
+      spreadsheet, projectIds, existing,
+    );
+    const pending = Array.from(new Map(
+      Array.from(latestByProject.values())
+        .map((item) => item.candidate)
+        .filter((candidate) => {
+          const recorded = existing.get(candidate.messageId);
+          return recorded &&
+            String(recorded.row[statusIndex] || '').trim() === 'Analyzed' &&
+            String(recorded.row[versionIndex] || '').trim() !==
+              OPENAI_ANALYSIS_CONFIG.CATEGORY_RULES_VERSION;
+        })
+        .map((candidate) => [candidate.messageId, candidate]),
+    ).values());
+    const selected = pending.slice(0, settings.batchSize);
+    const stats = {
+      latestProjects: latestByProject.size,
+      pendingBeforeRun: pending.length,
+      selectedMessages: selected.length,
+      reclassified: 0,
+      errors: 0,
+    };
+    selected.forEach((candidate) => {
+      const recorded = existing.get(candidate.messageId);
+      try {
+        const result = requestOpenAIEmailAnalysis_(candidate, settings);
+        candidate.projectId = String(
+          projectIds.get(candidate.applicationId) ||
+          recorded.row[OPENAI_ANALYSIS_HEADERS.indexOf('Project ID')] || '',
+        ).trim();
+        const row = buildOpenAIAnalysisRow_(
+          candidate, result.analysis, settings.model,
+          result.responseId, 'Analyzed', '',
+        );
+        writeOpenAIAnalysisRow_(sheet, recorded, row);
+        stats.reclassified += 1;
+      } catch (error) {
+        stats.errors += 1;
+        console.error(
+          `[CATEGORY RECLASSIFICATION] ${candidate.applicationId}: ` +
+          truncateOpenAIText_(String(error), 1000),
+        );
+      }
+    });
+    SpreadsheetApp.flush();
+    stats.pendingAfterRun = pending.length - stats.reclassified;
+    console.log(JSON.stringify(stats, null, 2));
+    return stats;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /** Repairs literal Sun Hours mentions even in previously checked latest emails. */
 function repairLatestProjectSunHoursCategories() {
   const lock = LockService.getScriptLock();
@@ -379,9 +476,7 @@ function repairLatestProjectSunHoursCategories() {
       const categories = splitOpenAIAnalysisCategories_(
         recorded.row[categoriesIndex],
       );
-      if (containsOpenAISunHours_(
-        `${candidate.subject || ''}\n${cleanedBody}`,
-      )) {
+      if (containsOpenAISunHours_(cleanedBody)) {
         stats.literalMentions += 1;
         if (!categories.includes('Sun Hours')) categories.push('Sun Hours');
       }
@@ -631,6 +726,7 @@ function getOrCreateOpenAIAnalysisSheet_(spreadsheet) {
   sheet.setColumnWidth(19, 520);
   sheet.setColumnWidth(24, 420);
   sheet.setColumnWidth(25, 180);
+  sheet.setColumnWidth(26, 210);
   sheet.getRange('Y:Y').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   sheet.getRange('I:I').setWrap(true);
   sheet.getRange('L:M').setWrap(true);
@@ -704,11 +800,16 @@ function migrateOpenAIAnalysisSheetSchema_(spreadsheet) {
   const isLegacy = LEGACY_OPENAI_ANALYSIS_HEADERS.every(
     (header, index) => headers[index] === header,
   );
-  const isPrevious = PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.every(
+  const isPreSunHours = PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.every(
     (header, index) => headers[index] === header,
   );
-  if (!isLegacy && !isPrevious) {
-    return;
+  const isPreCategoryRules = PRE_CATEGORY_RULES_OPENAI_ANALYSIS_HEADERS.every(
+    (header, index) => headers[index] === header,
+  );
+  if (!isLegacy && !isPreSunHours && !isPreCategoryRules) {
+    throw new Error(
+      'AI Analysis has an unexpected header layout. Review it before migration.',
+    );
   }
   if (isLegacy) {
     sheet.insertColumnBefore(2);
@@ -717,10 +818,17 @@ function migrateOpenAIAnalysisSheetSchema_(spreadsheet) {
       'AI Analysis schema upgraded: Project ID was inserted as column B.',
     );
   }
-  sheet.insertColumnAfter(PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.length);
+  if (isLegacy || isPreSunHours) {
+    sheet.insertColumnAfter(PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.length);
+    formatAnalysisHeaderCell_(
+      sheet.getRange(1, PRE_CATEGORY_RULES_OPENAI_ANALYSIS_HEADERS.length),
+      'Sunhours Checked At',
+    );
+  }
+  sheet.insertColumnAfter(PRE_CATEGORY_RULES_OPENAI_ANALYSIS_HEADERS.length);
   formatAnalysisHeaderCell_(
     sheet.getRange(1, OPENAI_ANALYSIS_HEADERS.length),
-    'Sunhours Checked At',
+    'Category Rules Version',
   );
 }
 
@@ -998,16 +1106,39 @@ function requestOpenAIEmailAnalysis_(candidate, settings) {
   }
 
   validateOpenAIAnalysis_(analysis);
-  if (
-    containsOpenAISunHours_(`${candidate.subject || ''}\n${cleanedBody}`) &&
-    !analysis.categories.includes('Sun Hours')
-  ) {
-    analysis.categories.push('Sun Hours');
-  }
+  applyOpenAICategoryEvidenceRules_(analysis, cleanedBody);
   return {
     responseId: String(responseObject.id || ''),
     analysis,
   };
+}
+
+function applyOpenAICategoryEvidenceRules_(analysis, cleanedBody) {
+  if (
+    containsOpenAISunHours_(cleanedBody) &&
+    !analysis.categories.includes('Sun Hours')
+  ) analysis.categories.push('Sun Hours');
+  if (
+    hasExplicitOpenAIDocumentationNeed_(cleanedBody) &&
+    !analysis.categories.includes('Documentation')
+  ) analysis.categories.push('Documentation');
+  if (analysis.categories.length > 1 && analysis.categories.includes('Other')) {
+    analysis.categories = analysis.categories.filter(
+      (category) => category !== 'Other',
+    );
+    if (analysis.primary_category === 'Other') {
+      analysis.primary_category = analysis.categories[0];
+    }
+  }
+}
+
+function hasExplicitOpenAIDocumentationNeed_(value) {
+  const text = String(value || '');
+  return (
+    /\b(?:documents?|documentation|paperwork|installation photos?|site photos?)\b.{0,80}?\b(?:are|is|remain|remains)\s+(?:still\s+)?(?:missing|required|needed|outstanding)\b/i.test(text) ||
+    /\b(?:missing|outstanding|required)\s+(?:(?:updated|current|installation|site|other|supporting)\s+){0,4}(?:documents?|documentation|paperwork|photos?)\b/i.test(text) ||
+    /\b(?:please|must|need to|required to)\s+(?:\w+\s+){0,5}(?:provide|upload|submit|send|attach)\s+(?:\w+\s+){0,5}(?:documents?|documentation|installation photos?|site photos?)\b/i.test(text)
+  );
 }
 
 function containsOpenAISunHours_(value) {
@@ -1060,7 +1191,10 @@ function cleanOpenAIEmailBody_(value, maxCharacters) {
   }
 
   const cutPatterns = [
-    /\nOn[\s\S]{0,800}?wrote:\s*\n/i,
+    // Gmail and forwarded Outlook replies may split "On Friday ... wrote:"
+    // across many whitespace-only lines. Stop before the quoted history.
+    /(?:^|\n)[ \t]*On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b[\s\S]{0,500}?\bwrote:\s*(?:\n|$)/i,
+    /\n\s*>\s*(?:From:|On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b)/i,
     /\n-{2,}\s*Original Message\s*-{2,}\s*\n/i,
     /\nFrom:\s+[^\n]+\nSent:\s+[^\n]+\nTo:\s+/i,
     /\n--\s*\nYou received this message because you are subscribed to the Google Groups/i,
@@ -1240,6 +1374,9 @@ function buildOpenAIAnalysisRow_(
     status,
     error,
     status === 'Analyzed' ? new Date() : '',
+    status === 'Analyzed'
+      ? OPENAI_ANALYSIS_CONFIG.CATEGORY_RULES_VERSION
+      : '',
   ].map(safeCellValue_);
 }
 

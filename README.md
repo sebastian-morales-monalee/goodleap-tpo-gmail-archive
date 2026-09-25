@@ -176,6 +176,7 @@ Primary functions:
 6. `retryFailedOpenAIEmailAnalyses()`
 7. `backfillLatestProjectEmailCategories()` (optional bounded OpenAI reclassification of previously unmarked latest emails)
 8. `repairLatestProjectSunHoursCategories()` (repairs explicit mentions in previously analyzed latest emails without an OpenAI call)
+9. `reclassifyLatestProjectEmailsWithOpenAI()` (bounded reanalysis of each project's latest analyzed email under the current category rules)
 
 The current taxonomy is multi-label and includes `Production`, `Layout`,
 `Equipment`, `Shading / Site Conditions`, `Structure`, `Documentation`,
@@ -185,6 +186,13 @@ equivalent solar-exposure-hours measurement in the newest cleaned message;
 generic production or shading discussion alone does not qualify. Exact literal
 mentions are added deterministically even if the model omits the category.
 New analyses mark the existing `Sunhours Checked At` audit column automatically.
+The `Categories` list represents topics of the latest message, not unresolved
+issues accumulated across the thread. `Production` is selected only when the
+newest message states a production discrepancy, rejection, or requested
+production action; a kWh value, repeated subject, or within-tolerance approval
+alone does not qualify. Explicit missing or requested documentation and
+installation photos add `Documentation` even if the model omits it. The
+`Category Rules Version` column records which analyzed rows use these rules.
 
 ### `AIAnalysisDashboard.gs`
 
@@ -1085,6 +1093,41 @@ analyzed latest emails that have no `Sunhours Checked At` marker; it makes
 bounded OpenAI calls. After either optional function, rerun
 `refreshProjectIdSummary()` and `setupAIAnalysisDashboard()`. Existing triggers
 do not need to be reinstalled.
+
+For an existing installation adopting the all-category latest-email rules,
+save the updated `OpenAIAnalysis.gs` in the same Apps Script project, then:
+
+1. Run `setupOpenAIEmailAnalysis()` once. It adds `Category Rules Version` to
+   `AI Analysis` without calling OpenAI or changing existing classifications.
+2. Run `previewOpenAIEmailAnalysis()` to inspect one analysis without writing
+   it; this does call OpenAI and consumes API tokens.
+3. If archived emails have no AI analysis yet, run
+   `analyzePendingGoodLeapEmailsWithOpenAI()` until `pendingMessages: 0`.
+   Run `retryFailedOpenAIEmailAnalyses()` separately for rows marked `Error`.
+4. Run `reclassifyLatestProjectEmailsWithOpenAI()` repeatedly until its log
+   reports `pendingAfterRun: 0`. It calls OpenAI for at most the configured
+   batch size per run, updates the full analysis of each project's latest
+   already analyzed email, and skips successfully versioned rows on reruns.
+   If it logs errors, resolve them and rerun; failed rows remain unchanged.
+5. Run `refreshProjectIdSummary()` to publish the latest email's categories,
+   AI Summary, Required Evidence, and Technical Notes. Run
+   `refreshAIAnalysisDashboard()` to update category-based charts and counts.
+
+The existing five-minute trigger uses the revised rules for new messages; no
+trigger setup is needed. `setupOpenAIEmailAnalysis()` itself never invokes the
+OpenAI API. Bulk reclassification does invoke it and may incur API charges.
+The classifier now has explicit inclusion and exclusion criteria for all ten
+categories. It removes quoted prior replies, including split-line `On ...
+wrote:` headers, before sending the latest message to OpenAI. This prevents a
+previous production or equipment rejection from becoming a current topic when
+the newest reply only asks for a finalized layout and missing documentation.
+`Category Rules Version` is `2026-09-25-all-categories-v2`, so earlier analyses
+are eligible for the bounded reclassification even if a previous rules
+revision was already run. Check representative Project ID Summary rows after
+the refresh: an explicit missing-document request must contain Documentation;
+a within-tolerance or provisional production statement alone must not produce
+Production; routine greetings and reply footers must not create Communication /
+Follow-up. AI classifications still require human review for ambiguous emails.
 
 ### Adding Shade Report PDF extraction to an existing installation
 
