@@ -209,9 +209,11 @@ It:
 - Adds `Weekly Project Creation` from the GoodLeap projects table in PostHog:
   `Week` and `Projects Created`. It counts distinct Project IDs by `created_at`
   in the America/Bogota Monday-to-Sunday week only when the current
-  `project_status` is nonblank. Drafts are excluded. The series starts on
+  GoodLeap financier record has a nonblank `application_id`. Projects without
+  an Application ID are excluded, regardless of status. The series starts on
   August 17, 2026; earlier archive weeks have no creation comparator. A
-  nonblank current status does not establish when the project left draft.
+  current Application ID can be assigned after project creation, so historical
+  creation-week counts may change when one is added later.
 - Extends `Weekly Production Projects` with `Projects Created` and charts two
   adjacent bars per week from August 17 onward: the existing three-color
   rejected-project stack and a separate blue GoodLeap creation count. The
@@ -985,6 +987,12 @@ No new Script Property or trigger is required.
    coordinator reaches the refresh through `OpenAIAnalysis.gs`.
 9. To rebuild the dashboard manually later, run
    `refreshAIAnalysisDashboard()`.
+
+For the Application ID eligibility update, replace and save
+`AIAnalysisDashboard.gs`, then run `previewAIAnalysisDashboard()` followed by
+`setupAIAnalysisDashboard()` once. The setup forces the weekly matrices and
+charts to be rebuilt even if an earlier refresh reported `unchanged: true`.
+No new trigger or Script Property is needed.
 
 ### Adding Project ID Summary to an existing installation
 

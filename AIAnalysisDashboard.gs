@@ -104,7 +104,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   PRODUCTION_PROJECTS_CHART_COLUMN: 25,
   UPDATED_PRODUCTION_PROJECTS_CHART_COLUMN: 35,
   LAYOUT_NOTE:
-    'Managed AI Dashboard layout v12: optional weekly Primary Category details plus labeled email, dual-axis rejected-vs-created project, and updated-project Production trends.',
+    'Managed AI Dashboard layout v13: optional weekly Primary Category details plus labeled email, dual-axis rejected-vs-created project counts filtered by Application ID, and updated-project Production trends.',
   HEADER_COLOR: '#6e04bd',
   HEADER_TEXT_COLOR: '#ffffff',
   CHART_COLOR: '#4285f4',
@@ -363,6 +363,7 @@ function loadAIAnalysisDashboardSummary_(spreadsheet) {
 
 function loadAIWeeklyProjectCreation_() {
   if (typeof getPostHogSolarSettings_ !== 'function' ||
+      typeof getPostHogSettings_ !== 'function' ||
       typeof executePostHogHogQL_ !== 'function') {
     throw new Error(
       'Weekly Project Creation requires PostHogSolarTables.gs and ' +
@@ -370,20 +371,28 @@ function loadAIWeeklyProjectCreation_() {
     );
   }
   const settings = getPostHogSolarSettings_();
+  const lookupSettings = getPostHogSettings_();
   const weekStart = AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_FIRST_WEEK;
   const queryLimit = AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_QUERY_LIMIT;
   const query = [
     'SELECT',
     "  toString(toStartOfWeek(toTimeZone(created_at, 'America/Bogota'), 1)) " +
       'AS week_start,',
-    `  uniqExact(${settings.projectIdField}) AS projects_created`,
-    `FROM ${settings.goodLeapProjectsTable}`,
+    `  uniqExact(p.${settings.projectIdField}) AS projects_created`,
+    `FROM ${settings.goodLeapProjectsTable} AS p`,
     // 05:00 UTC is midnight in America/Bogota on the first included Monday.
-    `WHERE created_at >= toDateTime('${weekStart} 05:00:00')`,
-    '  AND created_at <= now()',
-    `  AND project_status IS NOT NULL AND trim(project_status) != ''`,
-    `  AND ${settings.projectIdField} IS NOT NULL`,
-    `  AND trim(toString(${settings.projectIdField})) != ''`,
+    `WHERE p.created_at >= toDateTime('${weekStart} 05:00:00')`,
+    '  AND p.created_at <= now()',
+    `  AND p.${settings.projectIdField} IS NOT NULL`,
+    `  AND trim(toString(p.${settings.projectIdField})) != ''`,
+    `  AND toString(p.${settings.projectIdField}) IN (`,
+    `    SELECT toString(f.${lookupSettings.projectIdField})`,
+    `    FROM ${lookupSettings.lookupTable} AS f`,
+    `    WHERE f.${lookupSettings.applicationIdField} IS NOT NULL`,
+    `      AND trim(toString(f.${lookupSettings.applicationIdField})) != ''`,
+    `      AND f.${lookupSettings.projectIdField} IS NOT NULL`,
+    `      AND trim(toString(f.${lookupSettings.projectIdField})) != ''`,
+    '  )',
     'GROUP BY week_start',
     'ORDER BY week_start ASC',
     `LIMIT ${queryLimit}`,
