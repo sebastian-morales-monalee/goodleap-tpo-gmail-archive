@@ -697,6 +697,7 @@ complete function order is:
 | 10 | `previewOpenAIEmailAnalysis()` | `OpenAIAnalysis.gs` | Analyze one email without writing the AI Analysis sheet |
 | 11 | `analyzePendingGoodLeapEmailsWithOpenAI()` | `OpenAIAnalysis.gs` | Write the first bounded historical analysis batch; rerun until pending is zero |
 | 12 | `setupProjectIdSummary()` | `ProjectIdSummary.gs` | Create the project-level rollup required by the weekly project-production summary |
+| 12a | `setupCategoryExplorer()` | `CategoryExplorer.gs` | Create the live one-category selector, matching project count, and filtered project view |
 | 13 | `setupAIAnalysisDashboard()` | `AIAnalysisDashboard.gs` | Create Primary Category, email-production, created-project, and updated-project weekly summaries and charts |
 | 14 | `setupOpenAIPdfExtraction()` | `OpenAIPdfExtraction.gs` | Validate PDF settings and create PDF Analysis |
 | 15 | `testOpenAIPdfConnection()` | `OpenAIPdfExtraction.gs` | Verify authentication, model access, and the PDF Structured Output schema |
@@ -1077,6 +1078,25 @@ No new Script Property or trigger is required.
 9. Do not reinstall or edit triggers. The current five-minute and hourly
    workflows discover the new summary functions from the shared Apps Script
    runtime.
+
+### Adding Category Explorer to an existing installation
+
+Add or update `CategoryExplorer.gs` in the same Apps Script project and run
+`setupCategoryExplorer()`. This also upgrades an existing six-column explorer
+without changing its selected category. It requires an existing `Project ID
+Summary` with `Project ID`, `Application ID`, `Project URL`, `Categories`,
+`Status`, `Region`, and `AI Summary`. If that sheet has not been initialized,
+run `setupProjectIdSummary()` first. The new tab starts with `Production`
+selected; choose any single category in `Category Explorer!B3` to update
+the matching project list and the count in `E3` immediately. The results show
+the seven source fields above, including the latest `AI Summary` in column G.
+Matching checks complete category names separated by semicolons, so `Other`
+does not match a longer label containing that word.
+
+The view reads the latest-email categories already present in `Project ID
+Summary`. Normal project-summary refreshes automatically update its results.
+Changing the selector needs no Apps Script function, trigger, or OpenAI call.
+Rerunning `setupCategoryExplorer()` is safe and retains a valid selection.
 
 For an existing installation fixing `Sun Hours` and the category separator:
 save the updated `OpenAIAnalysis.gs`, `ProjectIdSummary.gs`, and
