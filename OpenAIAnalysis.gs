@@ -27,7 +27,7 @@ const OPENAI_ANALYSIS_CONFIG = {
   MAX_BATCH_SIZE: 20,
   DEFAULT_MAX_EMAIL_CHARACTERS: 30000,
   MAX_OUTPUT_TOKENS: 2200,
-  CATEGORY_RULES_VERSION: '2026-09-25-all-categories-v2',
+  CATEGORY_RULES_VERSION: '2026-09-25-production-tolerance-v3',
 };
 
 const OPENAI_ANALYSIS_PROPERTY_KEYS = {
@@ -113,7 +113,7 @@ const OPENAI_ANALYSIS_INSTRUCTIONS = [
   'Return concise English text even if the source contains another language.',
   'Classify the substantive topics in the newest message body from scratch. Do not carry categories, rejection reasons, or next steps forward from earlier emails, quoted replies, signatures, a repeated subject line, or archive metadata.',
   'Choose every category directly supported by the newest message and exactly one primary category for its main purpose. A category can be present whether its issue is open, corrected, or being clarified, but not solely because of incidental terminology.',
-  'Production: an explicit production-yield or benchmark discrepancy, out-of-tolerance result, failed production validation, or a direct request to calculate, recheck, or revise production. A kWh number, generic production subject, within-tolerance statement, or provisional estimate with compliance unverified only because a design or documents are pending does not by itself qualify.',
+  'Production: an explicit production-yield or benchmark discrepancy requiring action, out-of-tolerance result, failed production validation, or a direct request to calculate, recheck, or revise production. If the newest message says production is within tolerance or its validation is approved, do not select Production just because it mentions kWh, a benchmark, or proposed production. A separate explicit production failure or requested correction in that same newest message is required. A generic production subject or provisional estimate with compliance unverified only because a design or documents are pending does not qualify.',
   'Layout: a substantive array or panel placement, panel count per roof plane or azimuth, roof design, orientation, tilt, or proposed-versus-installed layout mismatch or change. A generic mention of a proposal or design is insufficient; an unfinished revised layout that must be finalized does qualify.',
   'Equipment: a substantive issue or change involving a named panel, inverter, module, battery, model, part type, electrical component, or its required count or compatibility. Do not use Equipment for generic installation photos, panels merely being repositioned, or the word system.',
   'Shading / Site Conditions: a substantive concern or action involving trees, obstructions, shade assumptions, LiDAR shading, site conditions, or their representation in the design. Do not infer it solely from a shade-report link or from a Sun Hours measurement with no shading/site topic.',
@@ -123,7 +123,7 @@ const OPENAI_ANALYSIS_INSTRUCTIONS = [
   'Communication / Follow-up: a substantive status inquiry, request for a new review or clarification, project identification question, ticket merge, acknowledgment, or coordination message. Do not add it just for a greeting, standard please-reply footer, or the ordinary instruction to upload a document or update a design.',
   'Sun Hours: an explicit sunhours, sun hours, sun-hours, or equivalent solar-exposure-hours measurement, requirement, or discussion. Do not infer it from unrelated production, shade-report links, or generic shading discussion.',
   'Other: only when none of the named categories is supported by the newest body. Never combine Other with a named category.',
-  'Examples: "production is within tolerance; please send installation photos" is Documentation only. "Production is outside tolerance; panel counts by azimuth differ" is Production and Layout. "The revised layout is not finalized and required photos are missing; production compliance cannot yet be verified" is Layout and Documentation, not Production or Equipment. "The offset exceeds 110%; submit an acknowledgment form" is Offset and Documentation, not Production unless a separate production discrepancy is stated.',
+  'Examples: "production is within tolerance; please send installation photos" is Documentation only. "Production validation was approved at 10,354 kWh versus a 10,352 kWh benchmark" is not Production. "Production is outside tolerance; panel counts by azimuth differ" is Production and Layout. "The revised layout is not finalized and required photos are missing; production compliance cannot yet be verified" is Layout and Documentation, not Production or Equipment. "The offset exceeds 110%; submit an acknowledgment form" is Offset and Documentation, not Production unless a separate production discrepancy is stated.',
   'Rejection reasons must describe the concrete issue stated in the email.',
   'Steps to clear must describe explicit or directly supported next actions.',
   'Set requires_human_review to true for ambiguity, conflicting values, missing context, or high-impact technical judgment.',
@@ -1115,6 +1115,28 @@ function requestOpenAIEmailAnalysis_(candidate, settings) {
 
 function applyOpenAICategoryEvidenceRules_(analysis, cleanedBody) {
   if (
+    hasExplicitOpenAIProductionToleranceFailure_(cleanedBody) &&
+    !analysis.categories.includes('Production')
+  ) {
+    analysis.categories.push('Production');
+    if (analysis.primary_category === 'Other') {
+      analysis.primary_category = 'Production';
+    }
+  }
+  if (
+    analysis.categories.includes('Production') &&
+    hasExplicitOpenAIProductionApproval_(cleanedBody) &&
+    !hasExplicitOpenAIProductionIssue_(cleanedBody)
+  ) {
+    analysis.categories = analysis.categories.filter(
+      (category) => category !== 'Production',
+    );
+    if (!analysis.categories.length) analysis.categories = ['Other'];
+    if (analysis.primary_category === 'Production') {
+      analysis.primary_category = analysis.categories[0];
+    }
+  }
+  if (
     containsOpenAISunHours_(cleanedBody) &&
     !analysis.categories.includes('Sun Hours')
   ) analysis.categories.push('Sun Hours');
@@ -1130,6 +1152,32 @@ function applyOpenAICategoryEvidenceRules_(analysis, cleanedBody) {
       analysis.primary_category = analysis.categories[0];
     }
   }
+}
+
+function hasExplicitOpenAIProductionToleranceFailure_(value) {
+  const text = String(value || '');
+  return (
+    /\bproduction\b[^.!?\n]{0,100}\b(?:outside|out of|beyond|not within)\s+(?:the\s+)?(?:production\s+)?tolerance\b/i.test(text) ||
+    /\b(?:outside|out of|beyond|not within)\s+(?:the\s+)?production\s+tolerance\b/i.test(text)
+  );
+}
+
+function hasExplicitOpenAIProductionApproval_(value) {
+  const text = String(value || '');
+  return (
+    /\bwithin\s+(?:the\s+)?(?:production\s+)?tolerance\b/i.test(text) ||
+    /\b(?:production|pre[- ]?check|validation)\b[^.!?\n]{0,100}\b(?:approved|passed|accepted)\b/i.test(text)
+  );
+}
+
+function hasExplicitOpenAIProductionIssue_(value) {
+  const text = String(value || '');
+  return (
+    hasExplicitOpenAIProductionToleranceFailure_(text) ||
+    /\b(?:production|pre[- ]?check|validation)\b[^.!?\n]{0,100}\b(?:failed|rejected|not approved|cannot be approved)\b/i.test(text) ||
+    /\b(?:failed|rejected)\b[^.!?\n]{0,100}\b(?:production|pre[- ]?check|validation)\b/i.test(text) ||
+    /\b(?:recalculate|recheck|revise|correct)\b[^.!?\n]{0,80}\b(?:production|yield|energy output|kwh)\b/i.test(text)
+  );
 }
 
 function hasExplicitOpenAIDocumentationNeed_(value) {

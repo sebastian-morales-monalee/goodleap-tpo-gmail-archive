@@ -190,7 +190,12 @@ The `Categories` list represents topics of the latest message, not unresolved
 issues accumulated across the thread. `Production` is selected only when the
 newest message states a production discrepancy, rejection, or requested
 production action; a kWh value, repeated subject, or within-tolerance approval
-alone does not qualify. Explicit missing or requested documentation and
+alone does not qualify. A post-analysis check removes an erroneous `Production`
+label from an explicitly within-tolerance or approved message unless that same
+message also states a production failure or asks for a production correction.
+It adds `Production` when the latest body explicitly says production is outside
+tolerance, even if the model omitted it.
+Explicit missing or requested documentation and
 installation photos add `Documentation` even if the model omits it. The
 `Category Rules Version` column records which analyzed rows use these rules.
 
@@ -1121,12 +1126,13 @@ categories. It removes quoted prior replies, including split-line `On ...
 wrote:` headers, before sending the latest message to OpenAI. This prevents a
 previous production or equipment rejection from becoming a current topic when
 the newest reply only asks for a finalized layout and missing documentation.
-`Category Rules Version` is `2026-09-25-all-categories-v2`, so earlier analyses
+`Category Rules Version` is `2026-09-25-production-tolerance-v3`, so earlier analyses
 are eligible for the bounded reclassification even if a previous rules
 revision was already run. Check representative Project ID Summary rows after
 the refresh: an explicit missing-document request must contain Documentation;
-a within-tolerance or provisional production statement alone must not produce
-Production; routine greetings and reply footers must not create Communication /
+a within-tolerance or approved production statement alone must not produce
+Production, while an outside-tolerance statement must retain it; routine
+greetings and reply footers must not create Communication /
 Follow-up. AI classifications still require human review for ambiguous emails.
 
 ### Adding Shade Report PDF extraction to an existing installation

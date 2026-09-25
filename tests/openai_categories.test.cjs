@@ -44,6 +44,70 @@ test('production keyword and kWh values alone do not add Production', () => {
   assert.match(instructions, /provisional estimate with compliance unverified/);
 });
 
+test('within-tolerance production is removed while actual blockers remain', () => {
+  const analysis = {
+    primary_category: 'Production',
+    categories: ['Production', 'Shading / Site Conditions', 'Documentation'],
+  };
+  context.applyOpenAICategoryEvidenceRules_(
+    analysis,
+    'Production is within tolerance, but the project is blocked by shading. ' +
+      'Updated installation photos are still missing.',
+  );
+  assert.deepEqual(Array.from(analysis.categories), [
+    'Shading / Site Conditions', 'Documentation',
+  ]);
+  assert.equal(analysis.primary_category, 'Shading / Site Conditions');
+});
+
+test('approved production with benchmark figures alone becomes Other', () => {
+  const analysis = {primary_category: 'Production', categories: ['Production']};
+  context.applyOpenAICategoryEvidenceRules_(
+    analysis,
+    'Production validation was approved. Proposed production is 10,354.662 ' +
+      'kWh versus a 10,352 kWh benchmark at -0.03% tolerance.',
+  );
+  assert.deepEqual(Array.from(analysis.categories), ['Other']);
+  assert.equal(analysis.primary_category, 'Other');
+});
+
+test('outside-tolerance or requested production correction keeps Production', () => {
+  for (const body of [
+    'Production is outside tolerance. Revise the design.',
+    'Production is within tolerance on one measure, but the pre-check failed ' +
+      'for production on the corrected design.',
+    'Production was within tolerance, but please recalculate production ' +
+      'after the system change.',
+  ]) {
+    const analysis = {primary_category: 'Production', categories: ['Production']};
+    context.applyOpenAICategoryEvidenceRules_(analysis, body);
+    assert.deepEqual(Array.from(analysis.categories), ['Production'], body);
+    assert.equal(analysis.primary_category, 'Production');
+  }
+});
+
+test('explicitly outside production tolerance adds Production when omitted', () => {
+  const analysis = {
+    primary_category: 'Other',
+    categories: ['Other', 'Layout'],
+  };
+  context.applyOpenAICategoryEvidenceRules_(
+    analysis,
+    'Production is outside tolerance, and the Origin module count does not ' +
+      'match the submitted design.',
+  );
+  assert.deepEqual(Array.from(analysis.categories), ['Layout', 'Production']);
+  assert.equal(analysis.primary_category, 'Production');
+});
+
+test('a non-production tolerance issue does not add Production', () => {
+  const analysis = {primary_category: 'Layout', categories: ['Layout']};
+  context.applyOpenAICategoryEvidenceRules_(
+    analysis, 'Roof tilt is outside tolerance. Revise the layout.',
+  );
+  assert.deepEqual(Array.from(analysis.categories), ['Layout']);
+});
+
 test('every named category has an operational rule and negative boundary', () => {
   const instructions = vm.runInContext('OPENAI_ANALYSIS_INSTRUCTIONS', context);
   for (const category of [
@@ -109,7 +173,7 @@ test('new analysis rows carry category rules version', () => {
     analysis, 'test-model', 'response-1', 'Analyzed', '',
   );
   assert.equal(row.length, 26);
-  assert.equal(row[25], '2026-09-25-all-categories-v2');
+  assert.equal(row[25], '2026-09-25-production-tolerance-v3');
 });
 
 test('setup migration preserves existing columns in both supported layouts', () => {
@@ -188,7 +252,7 @@ test('historical reclassification updates only the latest email and is resumable
   assert.equal(first.reclassified, 1);
   assert.equal(rows[1][8], 'Production');
   assert.equal(rows[2][8], 'Documentation');
-  assert.equal(rows[2][25], '2026-09-25-all-categories-v2');
+  assert.equal(rows[2][25], '2026-09-25-production-tolerance-v3');
   const second = context.reclassifyLatestProjectEmailsWithOpenAI();
   assert.equal(second.selectedMessages, 0);
 });
