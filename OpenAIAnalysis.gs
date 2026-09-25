@@ -61,9 +61,12 @@ const OPENAI_ANALYSIS_HEADERS = [
   'OpenAI Response ID',
   'Analysis Status',
   'Error',
+  'Sunhours Checked At',
 ];
 
-const LEGACY_OPENAI_ANALYSIS_HEADERS = OPENAI_ANALYSIS_HEADERS.filter(
+const PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS =
+  OPENAI_ANALYSIS_HEADERS.slice(0, -1);
+const LEGACY_OPENAI_ANALYSIS_HEADERS = PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.filter(
   (header) => header !== 'Project ID',
 );
 
@@ -76,6 +79,7 @@ const OPENAI_ANALYSIS_CATEGORIES = [
   'Documentation',
   'Offset',
   'Communication / Follow-up',
+  'Sun Hours',
   'Other',
 ];
 
@@ -104,6 +108,7 @@ const OPENAI_ANALYSIS_INSTRUCTIONS = [
   'Use null for an absent numeric value and an empty array for an absent list.',
   'Return concise English text even if the source contains another language.',
   'Choose every applicable category, but choose exactly one primary category.',
+  'Use Sun Hours when the newest message discusses sunhours, sun hours, sun-hours, solar exposure hours, or an equivalent sun-hour measurement; do not infer it from unrelated production or shading discussion.',
   'Rejection reasons must describe the concrete issue stated in the email.',
   'Steps to clear must describe explicit or directly supported next actions.',
   'Set requires_human_review to true for ambiguity, conflicting values, missing context, or high-impact technical judgment.',
@@ -118,6 +123,7 @@ function setupOpenAIEmailAnalysis() {
   const settings = getOpenAIAnalysisSettings_();
   const resources = getOrCreateResources_();
   const sheet = getOrCreateOpenAIAnalysisSheet_(resources.spreadsheet);
+  const normalizedSunHours = normalizeHistoricalOpenAISunHoursLabels_(sheet);
   const projectIdStats = applyAnalysisProjectIdsToSheet_(
     sheet,
     loadAnalysisProjectIdMap_(resources.spreadsheet),
@@ -135,6 +141,7 @@ function setupOpenAIEmailAnalysis() {
     `Project IDs refreshed: ${projectIdStats.populatedRows}; ` +
     `blank: ${projectIdStats.blankRows}.`,
   );
+  console.log(`Historical Sun Hours labels normalized: ${normalizedSunHours}.`);
   console.log('The OpenAI API key was found and was not logged.');
 
   return {
@@ -143,6 +150,7 @@ function setupOpenAIEmailAnalysis() {
     batchSize: settings.batchSize,
     maxEmailCharacters: settings.maxEmailCharacters,
     projectIds: projectIdStats,
+    normalizedSunHours,
   };
 }
 
@@ -240,6 +248,183 @@ function analyzePendingGoodLeapEmailsWithOpenAI() {
  */
 function analyzeGoodLeapEmailHistoryWithOpenAI() {
   return analyzePendingGoodLeapEmailsWithOpenAI();
+}
+
+/**
+ * Reclassifies only the newest archived email per resolved Project ID that
+ * predates the Sun Hours taxonomy. Repeated runs skip marked emails and each
+ * run is bounded by OPENAI_ANALYSIS_BATCH_SIZE.
+ */
+function backfillLatestProjectEmailCategories() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return {skippedBecauseLocked: true};
+  try {
+    const settings = getOpenAIAnalysisSettings_();
+    const spreadsheet = getOrCreateResources_().spreadsheet;
+    const sheet = getOrCreateOpenAIAnalysisSheet_(spreadsheet);
+    const projectIds = loadAnalysisProjectIdMap_(spreadsheet);
+    const values = sheet.getLastRow() > 1
+      ? sheet.getRange(2, 1, sheet.getLastRow() - 1,
+        OPENAI_ANALYSIS_HEADERS.length).getValues()
+      : [];
+    const existing = new Map();
+    const messageIdIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Gmail Message ID');
+    const statusIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Analysis Status');
+    const checkedIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Sunhours Checked At');
+    values.forEach((row, offset) => {
+      const messageId = String(row[messageIdIndex] || '').trim();
+      if (messageId) existing.set(messageId, {row, rowNumber: offset + 2});
+    });
+
+    const latestByProject = loadLatestOpenAIProjectEmailCandidates_(
+      spreadsheet, projectIds, existing,
+    );
+    const pending = Array.from(new Map(
+      Array.from(latestByProject.values())
+        .map((item) => item.candidate)
+        .filter((candidate) => {
+          const recorded = existing.get(candidate.messageId);
+          return recorded &&
+            String(recorded.row[statusIndex] || '').trim() === 'Analyzed' &&
+            !recorded.row[checkedIndex];
+        })
+        .map((candidate) => [candidate.messageId, candidate]),
+    ).values());
+    const selected = pending.slice(0, settings.batchSize);
+    const stats = {
+      latestProjects: latestByProject.size,
+      pendingBeforeRun: pending.length,
+      selectedMessages: selected.length,
+      reclassified: 0,
+      errors: 0,
+    };
+    selected.forEach((candidate) => {
+      try {
+        const result = requestOpenAIEmailAnalysis_(candidate, settings);
+        const recorded = existing.get(candidate.messageId);
+        sheet.getRange(recorded.rowNumber,
+          OPENAI_ANALYSIS_HEADERS.indexOf('Primary Category') + 1)
+          .setValue(result.analysis.primary_category);
+        sheet.getRange(recorded.rowNumber,
+          OPENAI_ANALYSIS_HEADERS.indexOf('Categories') + 1)
+          .setValue(joinOpenAIList_(result.analysis.categories));
+        sheet.getRange(recorded.rowNumber, checkedIndex + 1)
+          .setValue(new Date());
+        stats.reclassified += 1;
+      } catch (error) {
+        stats.errors += 1;
+        console.error(
+          `[SUNHOURS BACKFILL] ${candidate.applicationId}: ` +
+          truncateOpenAIText_(String(error), 1000),
+        );
+      }
+    });
+    SpreadsheetApp.flush();
+    stats.pendingAfterRun = pending.length - stats.reclassified;
+    console.log(JSON.stringify(stats, null, 2));
+    return stats;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Repairs literal Sun Hours mentions even in previously checked latest emails. */
+function repairLatestProjectSunHoursCategories() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return {skippedBecauseLocked: true};
+  try {
+    const settings = getOpenAIAnalysisSettings_();
+    const spreadsheet = getOrCreateResources_().spreadsheet;
+    const sheet = getOrCreateOpenAIAnalysisSheet_(spreadsheet);
+    const projectIds = loadAnalysisProjectIdMap_(spreadsheet);
+    const existing = new Map();
+    const messageIdIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Gmail Message ID');
+    const statusIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Analysis Status');
+    const categoriesIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Categories');
+    const values = sheet.getLastRow() > 1
+      ? sheet.getRange(2, 1, sheet.getLastRow() - 1,
+        OPENAI_ANALYSIS_HEADERS.length).getValues()
+      : [];
+    values.forEach((row, offset) => {
+      const messageId = String(row[messageIdIndex] || '').trim();
+      if (messageId) existing.set(messageId, {row, rowNumber: offset + 2});
+    });
+    const latestByProject = loadLatestOpenAIProjectEmailCandidates_(
+      spreadsheet, projectIds, existing,
+    );
+    const latestCandidates = Array.from(new Map(
+      Array.from(latestByProject.values())
+        .map((item) => [item.candidate.messageId, item.candidate]),
+    ).values());
+    const stats = {
+      latestProjects: latestByProject.size,
+      latestMessages: latestCandidates.length,
+      analyzedMessages: 0,
+      literalMentions: 0,
+      repaired: 0,
+      unavailableBodies: 0,
+    };
+    latestCandidates.forEach((candidate) => {
+      const recorded = existing.get(candidate.messageId);
+      if (
+        !recorded ||
+        String(recorded.row[statusIndex] || '').trim() !== 'Analyzed'
+      ) return;
+      stats.analyzedMessages += 1;
+      const body = loadOpenAIEmailBody_(candidate);
+      const cleanedBody = cleanOpenAIEmailBody_(
+        body, settings.maxEmailCharacters,
+      );
+      if (!cleanedBody) stats.unavailableBodies += 1;
+      const categories = splitOpenAIAnalysisCategories_(
+        recorded.row[categoriesIndex],
+      );
+      if (containsOpenAISunHours_(
+        `${candidate.subject || ''}\n${cleanedBody}`,
+      )) {
+        stats.literalMentions += 1;
+        if (!categories.includes('Sun Hours')) categories.push('Sun Hours');
+      }
+      const normalized = joinOpenAIList_(categories);
+      if (normalized !== String(recorded.row[categoriesIndex] || '')) {
+        sheet.getRange(recorded.rowNumber, categoriesIndex + 1)
+          .setValue(normalized);
+        stats.repaired += 1;
+      }
+    });
+    SpreadsheetApp.flush();
+    console.log(JSON.stringify(stats, null, 2));
+    return stats;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function loadLatestOpenAIProjectEmailCandidates_(
+  spreadsheet, projectIds, existing,
+) {
+  const latest = new Map();
+  const projectIdIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Project ID');
+  loadOpenAIEmailCandidates_(spreadsheet).forEach((candidate) => {
+    const recorded = existing.get(candidate.messageId);
+    const ids = String(
+      projectIds.get(candidate.applicationId) ||
+      (recorded && recorded.row[projectIdIndex]) || '',
+    ).split(/[\r\n,;|]+/)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+    const rawTime = candidate.receivedAt instanceof Date
+      ? candidate.receivedAt.getTime()
+      : new Date(candidate.receivedAt).getTime();
+    const timestamp = Number.isFinite(rawTime) ? rawTime : 0;
+    ids.forEach((projectId) => {
+      const previous = latest.get(projectId);
+      if (!previous || timestamp >= previous.timestamp) {
+        latest.set(projectId, {candidate, timestamp});
+      }
+    });
+  });
+  return latest;
 }
 
 /**
@@ -445,11 +630,57 @@ function getOrCreateOpenAIAnalysisSheet_(spreadsheet) {
   sheet.setColumnWidth(18, 420);
   sheet.setColumnWidth(19, 520);
   sheet.setColumnWidth(24, 420);
+  sheet.setColumnWidth(25, 180);
+  sheet.getRange('Y:Y').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   sheet.getRange('I:I').setWrap(true);
   sheet.getRange('L:M').setWrap(true);
   sheet.getRange('Q:S').setWrap(true);
   sheet.getRange('X:X').setWrap(true);
   return sheet;
+}
+
+function normalizeHistoricalOpenAISunHoursLabels_(sheet) {
+  const rowCount = sheet.getLastRow() - 1;
+  if (rowCount < 1) return 0;
+  const primaryIndex = OPENAI_ANALYSIS_HEADERS.indexOf('Primary Category') + 1;
+  const values = sheet.getRange(2, primaryIndex, rowCount, 2).getValues();
+  let changedRows = 0;
+  values.forEach((row, offset) => {
+    const primary = normalizeOpenAISunHoursLabel_(row[0]);
+    const categories = joinOpenAIList_(
+      splitOpenAIAnalysisCategories_(row[1]),
+    );
+    let changed = false;
+    if (primary !== String(row[0] || '')) {
+      sheet.getRange(offset + 2, primaryIndex).setValue(primary);
+      changed = true;
+    }
+    if (categories !== String(row[1] || '')) {
+      sheet.getRange(offset + 2, primaryIndex + 1).setValue(categories);
+      changed = true;
+    }
+    if (changed) changedRows += 1;
+  });
+  return changedRows;
+}
+
+function normalizeOpenAISunHoursLabel_(value) {
+  const label = String(value || '').trim();
+  return label.toLowerCase().replace(/[\s-]+/g, '') === 'sunhours'
+    ? 'Sun Hours'
+    : label;
+}
+
+function splitOpenAIAnalysisCategories_(value) {
+  const seen = new Set();
+  return String(value || '')
+    .split(/[\r\n,;|]+/)
+    .map((category) => normalizeOpenAISunHoursLabel_(category))
+    .filter((category) => {
+      if (!category || seen.has(category)) return false;
+      seen.add(category);
+      return true;
+    });
 }
 
 function migrateOpenAIAnalysisSheetSchema_(spreadsheet) {
@@ -473,13 +704,23 @@ function migrateOpenAIAnalysisSheetSchema_(spreadsheet) {
   const isLegacy = LEGACY_OPENAI_ANALYSIS_HEADERS.every(
     (header, index) => headers[index] === header,
   );
-  if (!isLegacy) {
+  const isPrevious = PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.every(
+    (header, index) => headers[index] === header,
+  );
+  if (!isLegacy && !isPrevious) {
     return;
   }
-  sheet.insertColumnBefore(2);
-  formatAnalysisHeaderCell_(sheet.getRange(1, 2), 'Project ID');
-  console.log(
-    'AI Analysis schema upgraded: Project ID was inserted as column B.',
+  if (isLegacy) {
+    sheet.insertColumnBefore(2);
+    formatAnalysisHeaderCell_(sheet.getRange(1, 2), 'Project ID');
+    console.log(
+      'AI Analysis schema upgraded: Project ID was inserted as column B.',
+    );
+  }
+  sheet.insertColumnAfter(PRE_SUNHOURS_OPENAI_ANALYSIS_HEADERS.length);
+  formatAnalysisHeaderCell_(
+    sheet.getRange(1, OPENAI_ANALYSIS_HEADERS.length),
+    'Sunhours Checked At',
   );
 }
 
@@ -757,10 +998,22 @@ function requestOpenAIEmailAnalysis_(candidate, settings) {
   }
 
   validateOpenAIAnalysis_(analysis);
+  if (
+    containsOpenAISunHours_(`${candidate.subject || ''}\n${cleanedBody}`) &&
+    !analysis.categories.includes('Sun Hours')
+  ) {
+    analysis.categories.push('Sun Hours');
+  }
   return {
     responseId: String(responseObject.id || ''),
     analysis,
   };
+}
+
+function containsOpenAISunHours_(value) {
+  return /(^|[^a-z0-9])sun[\s-]*hours?(?=$|[^a-z0-9])/i.test(
+    String(value || ''),
+  );
 }
 
 function loadOpenAIEmailBody_(candidate) {
@@ -986,6 +1239,7 @@ function buildOpenAIAnalysisRow_(
     responseId,
     status,
     error,
+    status === 'Analyzed' ? new Date() : '',
   ].map(safeCellValue_);
 }
 

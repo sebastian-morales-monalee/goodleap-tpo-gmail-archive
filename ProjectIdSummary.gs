@@ -238,6 +238,7 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
   [
     'Production Category Group',
+    'Categories',
     PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
     PROJECT_ID_SUMMARY_STATUS_HEADER,
     PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER,
@@ -245,6 +246,20 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_DELTA_HEADERS,
   PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
 );
+
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
+  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    [
+      'Production Category Group',
+      PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
+      PROJECT_ID_SUMMARY_STATUS_HEADER,
+      PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER,
+    ],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V1 = [
   'Project ID',
@@ -371,8 +386,10 @@ const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
 const PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX =
   PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX +
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length;
-const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX =
+const PROJECT_ID_SUMMARY_CATEGORIES_INDEX =
   PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
+const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX =
+  PROJECT_ID_SUMMARY_CATEGORIES_INDEX + 1;
 const PROJECT_ID_SUMMARY_STATUS_INDEX =
   PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
 const PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX =
@@ -522,6 +539,7 @@ function previewProjectIdSummary() {
       row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
     productionCategoryGroup:
       row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX] || '',
+    categories: row[PROJECT_ID_SUMMARY_CATEGORIES_INDEX] || '',
     [PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER]:
       row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX],
     status: row[PROJECT_ID_SUMMARY_STATUS_INDEX] || '',
@@ -631,6 +649,8 @@ function buildProjectIdSummary_(spreadsheet, options) {
   const pdfApplicationIds =
     loadProjectIdSummaryPdfApplicationIds_(spreadsheet);
   const emailMetrics = loadProjectIdSummaryEmailMetrics_(spreadsheet);
+  const latestArchivedEmails =
+    loadProjectIdSummaryLatestArchivedEmails_(spreadsheet);
   const pdfCounts = loadProjectIdSummaryProjectCounts_(
     spreadsheet,
     PROJECT_ID_SUMMARY_CONFIG.PDF_SHEET_NAME,
@@ -691,6 +711,8 @@ function buildProjectIdSummary_(spreadsheet, options) {
       latestProposedProductionKwh: '',
       latestBenchmarkProductionKwh: '',
       latestTolerancePercent: '',
+      latestCategories: '',
+      categoriesByMessageId: new Map(),
     };
     const pdfCount = pdfCounts.get(project.key) || 0;
     const applicationIds = new Set(project.applicationIds);
@@ -754,6 +776,11 @@ function buildProjectIdSummary_(spreadsheet, options) {
       benchArtPercent,
       email.latestTolerancePercent,
       getProjectIdSummaryCategoryGroup_(email),
+      getProjectIdSummaryLatestCategories_(
+        email,
+        applicationIds,
+        latestArchivedEmails,
+      ),
       calculateProjectIdSummaryToleranceRange_(benchArtPercent),
       projectMetadata.status || '',
       getProjectIdSummaryStatusOrder_(
@@ -871,6 +898,9 @@ function buildProjectIdSummaryStats_(summary) {
     ).length,
     projectsWithoutCategoryGroup: summary.rows.filter(
       (row) => !row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX],
+    ).length,
+    projectsWithLatestCategories: summary.rows.filter(
+      (row) => row[PROJECT_ID_SUMMARY_CATEGORIES_INDEX],
     ).length,
     projectsWithLatestGmailMessageId: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX],
@@ -1609,8 +1639,17 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
         latestProposedProductionKwh: '',
         latestBenchmarkProductionKwh: '',
         latestTolerancePercent: '',
+        latestCategories: '',
+        categoriesByMessageId: new Map(),
       };
       metric.count += 1;
+      const messageId = String(row[gmailMessageIdIndex] || '').trim();
+      if (messageId) {
+        metric.categoriesByMessageId.set(
+          messageId,
+          isCategorized ? String(row[categoriesIndex] || '').trim() : '',
+        );
+      }
       if (isCategorized) {
         metric.categorizedCount += 1;
         metric.hasProduction = metric.hasProduction || includesProduction;
@@ -1636,6 +1675,9 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
           metric.latestGmailMessageId = String(
             row[gmailMessageIdIndex] || '',
           ).trim();
+          metric.latestCategories = isCategorized
+            ? String(row[categoriesIndex] || '').trim()
+            : '';
           metric.latestRequiredEvidence = String(
             row[requiredEvidenceIndex] || '',
           );
@@ -1655,6 +1697,83 @@ function loadProjectIdSummaryEmailMetrics_(spreadsheet) {
     });
   });
   return metrics;
+}
+
+/** Prevents a pending/error analysis from showing categories for an older email. */
+function loadProjectIdSummaryLatestArchivedEmails_(spreadsheet) {
+  const latest = new Map();
+  const sheet = spreadsheet.getSheetByName('Emails');
+  if (!sheet || sheet.getLastRow() < 2) return latest;
+  const values = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getValues();
+  const headers = values[0].map((value) => String(value).trim());
+  const applicationIndex = requireProjectIdSummaryHeader_(
+    headers, 'Case ID', sheet.getName(),
+  );
+  const receivedIndex = requireProjectIdSummaryHeader_(
+    headers, 'Received At', sheet.getName(),
+  );
+  const messageIndex = requireProjectIdSummaryHeader_(
+    headers, 'Gmail Message ID', sheet.getName(),
+  );
+  values.slice(1).forEach((row, sequence) => {
+    const applicationId = String(row[applicationIndex] || '').trim();
+    const messageId = String(row[messageIndex] || '').trim();
+    if (!applicationId || !messageId) return;
+    const receivedAt = normalizeProjectIdSummaryDate_(row[receivedIndex]);
+    const timestamp = projectIdSummaryDateTime_(receivedAt);
+    const previous = latest.get(applicationId);
+    if (!previous || timestamp >= previous.timestamp) {
+      latest.set(applicationId, {messageId, timestamp, sequence});
+    }
+  });
+  return latest;
+}
+
+function getProjectIdSummaryLatestCategories_(email, applicationIds, latest) {
+  let latestArchived = null;
+  applicationIds.forEach((applicationId) => {
+    const candidate = latest.get(applicationId);
+    if (candidate && (
+      !latestArchived ||
+      candidate.timestamp > latestArchived.timestamp ||
+      (candidate.timestamp === latestArchived.timestamp &&
+        candidate.sequence >= latestArchived.sequence)
+    )) {
+      latestArchived = candidate;
+    }
+  });
+  let categories = '';
+  if (latestArchived) {
+    categories = email.categoriesByMessageId &&
+      typeof email.categoriesByMessageId.get === 'function'
+      ? email.categoriesByMessageId.get(latestArchived.messageId) || ''
+      : latestArchived.messageId === email.latestGmailMessageId
+        ? email.latestCategories || ''
+        : '';
+  } else if (email.latestGmailMessageId) {
+    categories = email.latestCategories || '';
+  }
+  return formatProjectIdSummaryCategories_(categories);
+}
+
+function formatProjectIdSummaryCategories_(value) {
+  const seen = new Set();
+  return String(value || '')
+    .split(/[\r\n,;|]+/)
+    .map((category) => {
+      const label = category.trim();
+      return label.toLowerCase().replace(/[\s-]+/g, '') === 'sunhours'
+        ? 'Sun Hours'
+        : label;
+    })
+    .filter((category) => {
+      if (!category || seen.has(category)) return false;
+      seen.add(category);
+      return true;
+    })
+    .join('; ');
 }
 
 function getProjectIdSummaryCategoryGroup_(emailMetric) {
@@ -2090,6 +2209,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -2301,6 +2424,20 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'Project ID Summary schema upgraded: Status Order was inserted after ' +
       'Status. Existing Delta and PostHog values were shifted safely.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: Categories was inserted after ' +
+      'Production Category Group. Existing values were shifted safely.',
+    );
   }
 
   sheet
@@ -2315,6 +2452,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   const aiContextStartColumn = PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1;
   const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
   const categoryGroupColumn = PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
+  const categoriesColumn = PROJECT_ID_SUMMARY_CATEGORIES_INDEX + 1;
   const toleranceRangeColumn = PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
   const statusColumn = PROJECT_ID_SUMMARY_STATUS_INDEX + 1;
   const statusOrderColumn = PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1;
@@ -2365,6 +2503,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(latestAiStartColumn + 3, 165);
   sheet.setColumnWidth(latestAiStartColumn + 4, 135);
   sheet.setColumnWidth(categoryGroupColumn, 260);
+  sheet.setColumnWidth(categoriesColumn, 240);
   sheet.setColumnWidth(toleranceRangeColumn, 190);
   sheet.setColumnWidth(statusColumn, 150);
   sheet.setColumnWidth(statusOrderColumn, 125);
@@ -2594,7 +2733,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       startRow,
       PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1,
       rowCount,
-      1,
+      2,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);

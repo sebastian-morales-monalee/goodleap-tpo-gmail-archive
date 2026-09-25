@@ -44,6 +44,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
     'Documentation',
     'Offset',
     'Communication / Follow-up',
+    'Sun Hours',
     'Other',
   ],
   CATEGORY_COLORS: {
@@ -55,6 +56,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
     Documentation: '#00acc1',
     Offset: '#ea4335',
     'Communication / Follow-up': '#5c6bc0',
+    'Sun Hours': '#26a69a',
     Other: '#9aa0a6',
   },
   FALLBACK_CATEGORY_COLORS: [

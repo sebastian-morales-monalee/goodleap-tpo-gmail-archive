@@ -174,10 +174,17 @@ Primary functions:
 4. `analyzePendingGoodLeapEmailsWithOpenAI()`
 5. `analyzeGoodLeapEmailHistoryWithOpenAI()`
 6. `retryFailedOpenAIEmailAnalyses()`
+7. `backfillLatestProjectEmailCategories()` (optional bounded OpenAI reclassification of previously unmarked latest emails)
+8. `repairLatestProjectSunHoursCategories()` (repairs explicit mentions in previously analyzed latest emails without an OpenAI call)
 
 The current taxonomy is multi-label and includes `Production`, `Layout`,
 `Equipment`, `Shading / Site Conditions`, `Structure`, `Documentation`,
-`Offset`, `Communication / Follow-up`, and `Other`.
+`Offset`, `Communication / Follow-up`, `Sun Hours`, and `Other`. `Sun Hours`
+requires an explicit discussion of sunhours, sun hours, sun-hours, or an
+equivalent solar-exposure-hours measurement in the newest cleaned message;
+generic production or shading discussion alone does not qualify. Exact literal
+mentions are added deterministically even if the model omits the category.
+New analyses mark the existing `Sunhours Checked At` audit column automatically.
 
 ### `AIAnalysisDashboard.gs`
 
@@ -293,15 +300,19 @@ It:
   of its categorized emails contains the exact `Production` value in
   `Categories`; otherwise it uses `Other Categories without Production`.
   Projects without a categorized email remain blank. The group occupies column
-  AA. Column AB, `Is tolerance into the range [-5%, +15%]`, evaluates the
+  AA. Column AB, `Categories`, lists every category from the latest archived
+   email for the project, separated by semicolons (`; `) even when category
+   names contain spaces. It stays blank while that newest email has no
+   successful AI analysis, rather than showing an older email's categories.
+  Column AC, `Is tolerance into the range [-5%, +15%]`, evaluates the
   calculated `(Bench-Art)/Art %`: it stores `TRUE` for inclusive values from
   -5% through +15%, `FALSE` outside that range, and remains blank when the
   percentage cannot be calculated. TRUE cells are green and FALSE cells are
-  pink. Column AC, `Status`, contains the current Artemis project status from
+  pink. Column AD, `Status`, contains the current Artemis project status from
   PostHog. GoodLeap is queried first and Artemis Sales is used only when the
-  Project ID is not found in GoodLeap. Column AD, `Status Order`, contains its
+  Project ID is not found in GoodLeap. Column AE, `Status Order`, contains its
   orientative numeric stage from the editable `Status Order` reference sheet;
-  unknown statuses remain blank. Shade Report Delta columns begin in AE.
+  unknown statuses remain blank. Shade Report Delta columns begin in AF.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
@@ -1001,8 +1012,8 @@ No new Script Property or trigger is required.
 1. Replace `ProjectIdSummary.gs` with the repository version. If the earlier
    Project ID Summary upgrades are not installed yet, also update
    `TOFValuesComparison.gs`, `PostHogSync.gs`, and `AIAnalysisDashboard.gs`.
-2. Keep the existing `OpenAIAnalysis.gs` and `OpenAIPdfExtraction.gs`; their
-   safe summary refresh calls remain compatible with the new columns.
+2. Update `OpenAIAnalysis.gs` and `AIAnalysisDashboard.gs` as well. Keep the
+   existing `OpenAIPdfExtraction.gs`; its safe summary refresh remains compatible.
 3. Save the Apps Script project.
 4. Open `ProjectIdSummary.gs` and run
    `previewProjectIdSummaryPostHogData()`.
@@ -1019,7 +1030,7 @@ No new Script Property or trigger is required.
    them right. It also appends `Map Data Source`, `RGB Basemap URL`, the latest
    Gmail context and AI production values, the calculated
    `(Bench-Art)/Art %`,
-   `Production Category Group`,
+   `Production Category Group`, `Categories`,
    `Is tolerance into the range [-5%, +15%]`, `Status`, `Status Order`, and the Shade Report
    Delta columns plus
    `Absolute Delta Azimuth`, `Absolute Delta Pitch`, `Absolute Azimuth + Pitch`,
@@ -1040,6 +1051,8 @@ No new Script Property or trigger is required.
    `Status Order` tab, the remaining project metadata matches PostHog, and AK, HI,
    and PR map to Alaska,
    Hawaii, and Puerto Rico rather than the four continental regions.
+   `Categories` in AB must match the latest archived email, and stays blank
+   when that email has not yet been analyzed.
 7. Run `refreshProjectIdSummary()` a second time. The expected result includes
    `updated: false` and `unchanged: true` when no source data changed.
    If you edit the `Status Order` tab later, rerun this function to update the
@@ -1051,6 +1064,27 @@ No new Script Property or trigger is required.
 9. Do not reinstall or edit triggers. The current five-minute and hourly
    workflows discover the new summary functions from the shared Apps Script
    runtime.
+
+For an existing installation fixing `Sun Hours` and the category separator:
+save the updated `OpenAIAnalysis.gs`, `ProjectIdSummary.gs`, and
+`AIAnalysisDashboard.gs` in Apps Script, then run these functions in order:
+
+1. `setupOpenAIEmailAnalysis()` to normalize historical `Sunhours` labels to
+   `Sun Hours` in `AI Analysis` (no OpenAI call).
+2. `repairLatestProjectSunHoursCategories()` to inspect each project's latest
+   already analyzed email and add `Sun Hours` when its newest cleaned message
+   explicitly mentions it (no OpenAI call; safe to rerun).
+3. `refreshProjectIdSummary()` to show the latest email's categories separated
+   by `; ` in column AB.
+4. `setupAIAnalysisDashboard()` once to update the category labels and charts.
+
+If latest emails remain unanalyzed, additionally run
+`analyzePendingGoodLeapEmailsWithOpenAI()` in batches until pending messages
+reach zero. Use `backfillLatestProjectEmailCategories()` only for previously
+analyzed latest emails that have no `Sunhours Checked At` marker; it makes
+bounded OpenAI calls. After either optional function, rerun
+`refreshProjectIdSummary()` and `setupAIAnalysisDashboard()`. Existing triggers
+do not need to be reinstalled.
 
 ### Adding Shade Report PDF extraction to an existing installation
 
@@ -1431,11 +1465,13 @@ The deployment is ready only when all of the following are true:
   three contextual AI fields, while V:Z contain the date, Proposed Production,
   Benchmark Production, the calculated `(Bench-Art)/Art %`, and the source
   `Tolerance %` from the same newest matching `AI Analysis` row. `Production
-  Category Group` occupies AA. Column AB contains the boolean
+  Category Group` occupies AA. Column AB lists categories for the latest
+  archived email; it is blank if that email lacks a completed analysis.
+  Column AC contains the boolean
   `Is tolerance into the range [-5%, +15%]`, calculated from `(Bench-Art)/Art
   %` with inclusive limits and green/pink status formatting. The three
   highlighted absolute columns show the absolute Azimuth Delta, absolute Pitch
-  Delta, and their sum. Columns AX:BB show the project engine version and four
+  Delta, and their sum. The final five columns show the project engine version and four
   project lifecycle timestamps from the GoodLeap or Artemis Sales project
   record. `US State Regions` contains the static regional association, with
   Alaska, Hawaii, and Puerto Rico represented as separate regions.
