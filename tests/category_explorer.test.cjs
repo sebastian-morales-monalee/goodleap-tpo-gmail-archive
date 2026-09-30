@@ -37,16 +37,32 @@ test('the view reads the thirteen intended columns and joins the group URL by me
     5001,
     emailHeaders,
   );
-  for (const column of ['A', 'B', 'C', 'AB', 'AD', 'F', 'U', 'R']) {
+  for (const header of [
+    'Project ID', 'Application ID', 'Project URL', 'Categories',
+    'Status', 'Region', 'AI Summary', 'Gmail Message ID',
+  ]) {
+    const column = context.categoryExplorerColumnLetter_(
+      headers.indexOf(header) + 1,
+    );
     assert.ok(
       formula.includes(`'Project ID Summary'!$${column}$2:$${column}$5001`),
       column,
     );
   }
   assert.match(formula, /^=IF\(\$B\$3="","",IFNA\(FILTER\(/);
-  assert.match(formula, /REGEXMATCH\('Project ID Summary'!\$AB\$2:\$AB\$5001/);
+  const categoriesColumn = context.categoryExplorerColumnLetter_(
+    headers.indexOf('Categories') + 1,
+  );
+  assert.ok(formula.includes(
+    `REGEXMATCH('Project ID Summary'!$${categoriesColumn}$2:$${categoriesColumn}$5001`,
+  ));
   assert.match(formula, /\(\^\|;\\s\*\).*\\s\*;\|\$\)/);
-  assert.ok(formula.includes("VLOOKUP('Project ID Summary'!$R$2:$R$5001,{'Emails'!$Q$2:$Q,'Emails'!$T$2:$T},2,FALSE)"));
+  const messageColumn = context.categoryExplorerColumnLetter_(
+    headers.indexOf('Gmail Message ID') + 1,
+  );
+  assert.ok(formula.includes(
+    `VLOOKUP('Project ID Summary'!$${messageColumn}$2:$${messageColumn}$5001,{'Emails'!$Q$2:$Q,'Emails'!$T$2:$T},2,FALSE)`,
+  ));
   assert.ok(formula.includes('ARRAYFORMULA(IF('));
 });
 

@@ -213,13 +213,29 @@ const PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS = [
   'Team Name',
 ];
 
+const PROJECT_ID_SUMMARY_ENERGY_HEADERS = [
+  'active_panel_count',
+  'panel_rated_power_w',
+  'system_size_kw',
+  'Inverter Type',
+  'inverter_nominal_ac_power_w',
+  'inverter_count',
+  'inverter_max_efficiency_percent',
+  'reference_dc_production_kwh',
+  'dc_ac_ratio',
+  'dc_ac_correction_factor',
+  'estimated_annual_ac_production_kwh',
+  'Annual Energy Consumption kWh',
+  'estimated_offset_percent',
+];
+
 const LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_V9 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(0, 2).concat(
     PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS,
     LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(2),
   );
 
-const PROJECT_ID_SUMMARY_BASE_HEADERS = [
+const LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY = [
   'Project ID',
   'Application ID',
   'Project URL',
@@ -227,6 +243,12 @@ const PROJECT_ID_SUMMARY_BASE_HEADERS = [
   PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS,
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(2),
 );
+
+const PROJECT_ID_SUMMARY_BASE_HEADERS =
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.slice(0, 6).concat(
+    PROJECT_ID_SUMMARY_ENERGY_HEADERS,
+    LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.slice(6),
+  );
 
 const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER =
   'Is tolerance into the range [-5%, +15%]';
@@ -248,11 +270,26 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
 );
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
     PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
     [
       'Production Category Group',
+      PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
+      PROJECT_ID_SUMMARY_STATUS_HEADER,
+      PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER,
+    ],
+    PROJECT_ID_SUMMARY_DELTA_HEADERS,
+    PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+  );
+
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16 =
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
+    PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
+    PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
+    [
+      'Production Category Group',
+      'Categories',
       PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER,
       PROJECT_ID_SUMMARY_STATUS_HEADER,
       PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER,
@@ -332,7 +369,7 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V9 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V10 =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
     LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V10,
     ['Production Category Group'],
@@ -340,7 +377,7 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V10 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11 =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
     LEGACY_PROJECT_ID_SUMMARY_LATEST_AI_HEADERS_V11,
     ['Production Category Group'],
@@ -348,7 +385,7 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V11 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12 =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
     PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
     ['Production Category Group'],
@@ -356,7 +393,7 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V12 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13 =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
     PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
     [
@@ -367,7 +404,7 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V13 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14 =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+  LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
     PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
     PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
     [
@@ -690,6 +727,11 @@ function buildProjectIdSummary_(spreadsheet, options) {
       projects.map((project) => project.projectId),
     )
     : emptyProjectIdSummaryProjectMetadataLookup_();
+  const energyMetricsLookup = options && options.refreshMapData
+    ? fetchProjectIdSummaryEnergyMetrics_(
+      projects.map((project) => project.projectId),
+    )
+    : new Map();
   const rows = [];
   let projectsWithoutEmails = 0;
   let projectsWithoutPdfs = 0;
@@ -742,6 +784,8 @@ function buildProjectIdSummary_(spreadsheet, options) {
       projectMetadataLookup.byProjectId.get(project.key);
     const projectMetadata = refreshedProjectMetadata ||
       existingProjectMetadata.get(project.key) || {};
+    const energyMetrics = energyMetricsLookup.get(project.key) ||
+      (existingProjectMetadata.get(project.key) || {}).energyMetrics || {};
     const benchArtPercent =
       calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
         email.latestBenchmarkProductionKwh,
@@ -755,6 +799,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       projectMetadata.address || '',
       projectMetadata.state || '',
       getProjectIdSummaryRegion_(projectMetadata.state, stateRegionLookup),
+      ...projectEnergyMetricCells_(energyMetrics),
       projectMetadata.solarPanel || '',
       projectMetadata.inverter || '',
       projectMetadata.installer || '',
@@ -1427,6 +1472,20 @@ function loadExistingProjectIdSummaryProjectMetadata_(sheet) {
       inverter: String(row[projectDetailIndexes[4]] || '').trim(),
       installer: String(row[projectDetailIndexes[5]] || '').trim(),
       teamName: String(row[projectDetailIndexes[6]] || '').trim(),
+      energyMetrics: Object.fromEntries(
+        PROJECT_ID_SUMMARY_ENERGY_HEADERS.map((header, index) => [
+          [
+            'activePanelCount', 'panelRatedPowerW', 'systemSizeKw',
+            'inverterType',
+            'inverterNominalAcPowerW', 'inverterCount',
+            'inverterMaxEfficiencyPercent', 'referenceDcProductionKwh',
+            'dcAcRatio', 'dcAcCorrectionFactor',
+            'estimatedAnnualAcProductionKwh', 'annualEnergyConsumptionKwh',
+            'estimatedOffsetPercent',
+          ][index],
+          row[headers.indexOf(header)],
+        ]),
+      ),
       status: String(row[statusIndex] || '').trim(),
       engineVersion: String(row[metadataIndexes[0]] || '').trim(),
       createdAt: normalizeProjectIdSummaryDate_(row[metadataIndexes[1]]),
@@ -2213,6 +2272,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15,
+    ) &&
+    !projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16,
     );
   if (hasUnexpectedContent) {
     throw new Error(
@@ -2438,6 +2501,20 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       'Project ID Summary schema upgraded: Categories was inserted after ' +
       'Production Category Group. Existing values were shifted safely.',
     );
+  } else if (
+    projectIdSummaryHeadersMatch_(
+      currentHeaders,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16,
+    )
+  ) {
+    migrateProjectIdSummarySchema_(
+      sheet,
+      LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16,
+    );
+    console.log(
+      'Project ID Summary schema upgraded: Artemis energy metrics were ' +
+      'inserted after Region. Existing values were shifted safely.',
+    );
   }
 
   sheet
@@ -2485,6 +2562,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(projectIdSummaryColumn_('Address'), 300);
   sheet.setColumnWidth(projectIdSummaryColumn_('State'), 90);
   sheet.setColumnWidth(projectIdSummaryColumn_('Region'), 120);
+  PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
+    sheet.setColumnWidth(projectIdSummaryColumn_(header), 155);
+  });
   sheet.setColumnWidths(projectIdSummaryColumn_('Solar Panel'), 2, 220);
   sheet.setColumnWidths(projectIdSummaryColumn_('Installer'), 2, 180);
   sheet.setColumnWidths(projectIdSummaryColumn_('Email Count'), 3, 135);
@@ -2652,16 +2732,15 @@ function applyProjectIdSummaryWrap_(sheet) {
 function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   if (rowCount < 1) return;
 
-  sheet
-    .getRange(
-      startRow,
-      projectIdSummaryColumn_('Address'),
-      rowCount,
-      PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS.length,
-    )
-    .setBackground('#ffffff')
-    .setNumberFormat('@')
-    .setWrap(true);
+  PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS.forEach((header) => {
+    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
+      .setBackground('#ffffff').setNumberFormat('@').setWrap(true);
+  });
+  PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
+    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
+      .setNumberFormat(header === 'Inverter Type' ? '@' : header.endsWith('_count') ||
+        header === 'estimated_offset_percent' ? '#,##0' : '#,##0.000000');
+  });
   sheet
     .getRange(
       startRow,

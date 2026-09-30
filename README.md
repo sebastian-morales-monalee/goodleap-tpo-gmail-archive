@@ -290,7 +290,7 @@ It:
   Projects with multiple values show them in one cell separated by semicolons.
 - Copies the authoritative Project URL into column C instead of constructing
   it, preserving the correct GoodLeap or Artemis Sales domain.
-- Enriches columns D:J from PostHog with Address, State, Region, Solar Panel,
+- Enriches project-detail columns from PostHog with Address, State, Region, Solar Panel,
   Inverter, Installer, and Team Name. GoodLeap is queried first and Artemis
   Sales is used only when the Project ID is not found in GoodLeap. Address and
   State fall back to the related property record; Installer is resolved through
@@ -303,29 +303,29 @@ It:
 - Selects the matching `AI Analysis` row with the most recent valid `Email
   Received At` value, using the last sheet occurrence to break exact timestamp
   ties. It copies that row's `Gmail Message ID`, `Required Evidence`, `Technical
-  Notes`, and `AI Summary` into R:U, plus `Email Received At`, `Proposed
+  Notes`, and `AI Summary`, plus `Email Received At`, `Proposed
   Production kWh`, `Benchmark Production kWh`, the calculated
-  `(Bench-Art)/Art %`, and `Tolerance %` into V:Z. The calculated percentage
+  `(Bench-Art)/Art %`, and `Tolerance %`. The calculated percentage
   uses `(Benchmark Production - Proposed Production) / Proposed Production`
   and remains blank when either input is unavailable or Proposed Production is
   zero.
 - Assigns each project to `Production with other categories` when at least one
   of its categorized emails contains the exact `Production` value in
   `Categories`; otherwise it uses `Other Categories without Production`.
-  Projects without a categorized email remain blank. The group occupies column
-  AA. Column AB, `Categories`, lists every category from the latest archived
+  Projects without a categorized email remain blank. `Categories` lists every
+  category from the latest archived
    email for the project, separated by semicolons (`; `) even when category
    names contain spaces. It stays blank while that newest email has no
    successful AI analysis, rather than showing an older email's categories.
-  Column AC, `Is tolerance into the range [-5%, +15%]`, evaluates the
+  `Is tolerance into the range [-5%, +15%]` evaluates the
   calculated `(Bench-Art)/Art %`: it stores `TRUE` for inclusive values from
   -5% through +15%, `FALSE` outside that range, and remains blank when the
   percentage cannot be calculated. TRUE cells are green and FALSE cells are
-  pink. Column AD, `Status`, contains the current Artemis project status from
+  pink. `Status` contains the current Artemis project status from
   PostHog. GoodLeap is queried first and Artemis Sales is used only when the
-  Project ID is not found in GoodLeap. Column AE, `Status Order`, contains its
+  Project ID is not found in GoodLeap. `Status Order` contains its
   orientative numeric stage from the editable `Status Order` reference sheet;
-  unknown statuses remain blank. Shade Report Delta columns begin in AF.
+  unknown statuses remain blank.
 - Reads `map_data_source` and `rgb_basemap_url` from the GoodLeap project map
   source table, with Artemis Sales as fallback, and keeps the RGB URL
   clickable.
@@ -340,8 +340,28 @@ It:
   `updated_at`, `last_status_updated_at`, and `design_updated_at` from the
   GoodLeap projects table, with Artemis Sales as fallback. The corresponding
   `Engine Version`, `Created At`, `Updated At`, `Last Status Updated At`, and
-  `Design Updated At` columns occupy AZ:BD and retain prior successful values
+  `Design Updated At` columns retain prior successful values
   after temporary PostHog query failures.
+- Adds Artemis energy metrics immediately after Region: active panel count,
+  rated panel watts from the selected Pricing Version, system size, selected
+  inverter type (`count_strategy`), AC watts/count/efficiency, annual energy
+  consumption (`annual_energy_use_ackwh`), active-panel reference DC production,
+  DC/AC ratio and correction factor, estimated AC production, and estimated
+  offset. The existing `Engine Version` column already supplies
+  `production_engine_version`. Never sum source `panel_capacity_watts` as
+  nominal power. Estimates remain blank when the physical inverter count,
+  inverter model, V2/V3 no-curve formula, correction-table range, or adjusted
+  consumption cannot be established safely.
+  Microinverters use a positive `inverter_count_override`, otherwise
+  `projects.active_panels_count`; the published panel count equals that count.
+  String/other known strategies use one inverter and the active panel-row count.
+  Pricing models without an ID are resolved by a normalized catalogue model
+  number. A unique match supplies missing power/efficiency. Duplicate matches
+  supply only the inverter type when every record has the same nonempty
+  `count_strategy`; conflicting or missing strategies remain unresolved.
+  DC production, AC production, and offset stay blank when panel-row counts
+  disagree with the effective or known project count. Offset uses the
+  confirmed efficiency-adjusted annual consumption and truncates to an integer.
 - Applies wrapped text to every cell in `Project ID Summary` on setup and every
   refresh, including the header and all currently allocated blank cells.
 - Sorts projects by Email Count and then by the most recent email.
@@ -356,6 +376,18 @@ Primary functions:
 3. `previewProjectIdSummary()`
 4. `setupProjectIdSummary()`
 5. `refreshProjectIdSummary()`
+6. `validateArtemisEnergyProjectExample()` (read-only source validation before
+   publishing the migrated sheet)
+
+For this energy-metric upgrade, install both `ProjectIdSummary.gs` and the new
+`EnergyProductionMetrics.gs` in the same Apps Script project. Run
+`validateArtemisEnergyProjectExample()` first, then `setupProjectIdSummary()`
+and `setupCategoryExplorer()` to migrate the summary and update the explorer's
+header-based references. No trigger reinstallation is required. Unsupported
+engine/curve combinations or missing catalog inputs leave estimates blank.
+For the interim panel-count update, replace `EnergyProductionMetrics.gs`, run
+`validateArtemisEnergyProjectExample()` and `validateArtemisPanelCountRules()`,
+then `refreshProjectIdSummary()`. This update does not add or move columns.
 
 ### `OpenAIPdfExtraction.gs`
 
