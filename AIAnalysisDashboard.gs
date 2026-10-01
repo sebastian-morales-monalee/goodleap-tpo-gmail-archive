@@ -19,6 +19,85 @@
  * automatic analysis check. The existing five-minute trigger is sufficient.
  */
 
+const GOODLEAP_CONDITIONS_CHART_TITLE = 'GoodLeap Project Conditions';
+
+/** Installs only the requested conditions chart; no PostHog/OpenAI calls. */
+function setupGoodLeapConditionsChart() {
+  const spreadsheet = getOrCreateResources_().spreadsheet;
+  const sheet = spreadsheet.getSheetByName('AI Dashboard');
+  if (!sheet) throw new Error('AI Dashboard is missing.');
+  const stats = refreshGoodLeapConditionsChart_(spreadsheet, sheet, true);
+  console.log(JSON.stringify(stats));
+  return stats;
+}
+
+function goodLeapChartColumnLetter_(column) {
+  let result = '';
+  while (column > 0) {
+    column--;
+    result = String.fromCharCode(65 + column % 26) + result;
+    column = Math.floor(column / 26);
+  }
+  return result;
+}
+
+function buildGoodLeapConditionsChartRows_(headers, sheetName, lastRow) {
+  const range = (header) => {
+    const index = headers.indexOf(header);
+    if (index < 0) throw new Error(`Missing conditions chart header: ${header}`);
+    const column = goodLeapChartColumnLetter_(index + 1);
+    return `'${sheetName.replace(/'/g, "''")}'!$${column}$2:$${column}$${Math.max(2, lastRow)}`;
+  };
+  const id = range('Project ID');
+  const minimum = range('kWh/kW >= MIN');
+  const standard = range('Offset <= 110%');
+  const exception = range('110 % < offset ≤ 150 %');
+  return [
+    ['Total Projects', `=COUNTIFS(${id},"<>")`],
+    ['kWh/kW ≥ MIN AND Offset ≤ 110%', `=COUNTIFS(${id},"<>",${minimum},TRUE,${standard},TRUE)`],
+    ['Projects with Missing Data', `=SUMPRODUCT((${id}<>"")*(((${minimum}="")+(${standard}="")+(${exception}=""))>0))`],
+    ['kWh/kW ≥ MIN AND 110% < Offset ≤ 150%', `=COUNTIFS(${id},"<>",${minimum},TRUE,${exception},TRUE)`],
+  ];
+}
+
+function refreshGoodLeapConditionsChart_(spreadsheet, sheet, force) {
+  const source = spreadsheet.getSheetByName('Project ID Summary');
+  if (!source) throw new Error('Project ID Summary is missing.');
+  const headers = source.getRange(1, 1, 1, source.getLastColumn()).getValues()[0];
+  // Empty rows are excluded by Project ID. The shared bounds include future rows.
+  const rows = buildGoodLeapConditionsChartRows_(headers, source.getName(), source.getMaxRows());
+  ensureAIAnalysisSheetCapacity_(sheet, 44, 57);
+  const table = sheet.getRange(36, 46, 5, 2);
+  table.setValues([['Condition', 'Projects'], ...rows.map((row) => [row[0], ''])]);
+  sheet.getRange(37, 47, 4, 1).setFormulas(rows.map((row) => [row[1]]));
+  table.setFontFamily('Arial').setFontSize(11).setVerticalAlignment('middle');
+  sheet.getRange(36, 46, 1, 2).setBackground('#6e04bd').setFontColor('#ffffff').setFontWeight('bold');
+  sheet.getRange(37, 47, 4, 1).setNumberFormat('0');
+  sheet.setColumnWidth(46, 520);
+  sheet.setColumnWidth(47, 100);
+  sheet.getRange(42, 46).setValue('Missing Data: any blank in Y, Z or AA. FALSE is not missing.').setFontSize(10);
+  sheet.getRange(43, 46).setValue('Total Projects is a reference, not an additional group to sum.').setFontSize(10);
+  SpreadsheetApp.flush();
+  const existing = sheet.getCharts().filter((chart) => chart.getOptions().get('title') === GOODLEAP_CONDITIONS_CHART_TITLE);
+  if (existing.length === 0 || force) {
+    const builder = sheet.newChart();
+    const chart = builder.asColumnChart().addRange(table).setNumHeaders(1)
+      .setPosition(5, 46, 0, 0)
+      .setOption('title', GOODLEAP_CONDITIONS_CHART_TITLE)
+      .setOption('legend', {position: 'none'})
+      .setOption('width', 1200).setOption('height', 440)
+      .setOption('colors', ['#4285f4'])
+      .setOption('series', {0: {dataLabel: 'value'}})
+      .setOption('hAxis', {slantedText: true, slantedTextAngle: 20, textStyle: {fontSize: 12}})
+      .setOption('vAxis', {title: 'Projects', minValue: 0, format: '0'})
+      .build();
+    existing.forEach((previous) => sheet.removeChart(previous));
+    sheet.insertChart(chart);
+  }
+  const counts = sheet.getRange(37, 47, 4, 1).getValues().map((row) => row[0]);
+  return {sheet: sheet.getName(), chart: GOODLEAP_CONDITIONS_CHART_TITLE, counts, charts: sheet.getCharts().length};
+}
+
 const AI_ANALYSIS_DASHBOARD_CONFIG = {
   SHEET_NAME: 'AI Dashboard',
   WEEKLY_SHEET_NAME: 'AI Weekly Summary',
@@ -1437,12 +1516,13 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     layoutMatches &&
     doesAIAnalysisDashboardDataMatch_(sheet, summary, visibleWeeks)
   ) {
+    refreshGoodLeapConditionsChart_(spreadsheet, sheet);
     return {
       sheet: sheet.getName(),
       updated: false,
       unchanged: true,
       chartsRebuilt: false,
-      charts: expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks),
+      charts: sheet.getCharts().length,
       weeklyCharts: visibleWeeks.length,
     };
   }
@@ -1476,12 +1556,13 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
   }
   SpreadsheetApp.flush();
 
+  refreshGoodLeapConditionsChart_(spreadsheet, sheet);
   return {
     sheet: sheet.getName(),
     updated: true,
     unchanged: false,
     chartsRebuilt: rebuildLayout,
-    charts: expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks),
+    charts: sheet.getCharts().length,
     weeklyCharts: visibleWeeks.length,
   };
 }
@@ -1919,7 +2000,9 @@ function doesAIAnalysisDashboardLayoutMatch_(
     return false;
   }
   if (
-    sheet.getCharts().length !==
+    sheet.getCharts().filter((chart) =>
+      chart.getOptions().get('title') !== GOODLEAP_CONDITIONS_CHART_TITLE,
+    ).length !==
     expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks)
   ) {
     return false;
@@ -2165,10 +2248,7 @@ function buildAIAnalysisDashboardStats_(summary, weeklyStats, dashboardStats) {
       summary.updatedProductionProjects.projectsWithoutDate,
     duplicateUpdatedProductionProjectRows:
       summary.updatedProductionProjects.duplicateProjectRows,
-    totalCharts: expectedAIAnalysisDashboardChartCount_(
-      summary,
-      visibleWeeks,
-    ),
+    totalCharts: dashboardStats.charts,
     weeklyMatrixCategories: getAIWeeklyMatrixCategories_(summary),
     excludedFromWeeklyCount: summary.excludedFromWeeklyCount,
     uncategorizedRows: summary.uncategorizedRows,

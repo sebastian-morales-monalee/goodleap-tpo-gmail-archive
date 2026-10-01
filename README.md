@@ -18,6 +18,18 @@ No web-app deployment is required.
 
 ## GoodLeap conditional columns
 
+`AI Dashboard` includes a native `GoodLeap Project Conditions` column chart,
+in this order: Total Projects, kWh/kW ≥ MIN AND Offset ≤ 110%, Projects with
+Missing Data, and kWh/kW ≥ MIN AND 110% < Offset ≤ 150%. Its formula-backed
+table is at AT36:AU40. A populated Project ID defines a project row; any blank
+Y/Z/AA boolean makes that project incomplete, but FALSE does not. Total is a
+reference and the four bars are not an additive partition. Run
+`setupGoodLeapConditionsChart()` after installing `AIAnalysisDashboard.gs`;
+normal dashboard refreshes maintain it without additional energy queries.
+Installed and executed on 2026-10-01. The four displayed counts were
+117, 68, 39 and 4, independently matched to the source booleans. The four
+pre-existing charts were preserved, and repeated setup kept five charts.
+
 `Project ID Summary` now places four live formula columns after
 `Energy Calculation Status`: `kWh/kW` (annual AC production divided by system
 size), `kWh/kW >= MIN` (exact state lookup), `Offset <= 110%`, and
