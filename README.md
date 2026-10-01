@@ -16,6 +16,32 @@ Artemis project tables for each Project ID.
 The implementation is designed for a standalone Google Apps Script project.
 No web-app deployment is required.
 
+## GoodLeap conditional columns
+
+`Project ID Summary` now places four live formula columns after
+`Energy Calculation Status`: `kWh/kW` (annual AC production divided by system
+size), `kWh/kW >= MIN` (exact state lookup), `Offset <= 110%`, and
+`110 % < offset ≤ 150 %`. Comparisons use unrounded numeric values and return
+real booleans. Missing inputs, zero size or an unmapped state remain blank.
+The offset band does not verify a signed form or approve an exception.
+
+`GoodLeap conditionals` stores the state minimums from the user's October 1,
+2026 reference image. Existing valid edits are preserved on refresh. RI is
+not listed in that image and is deliberately unmapped. Offset comparisons
+read the existing integer `estimated_offset_percent`, not a new offset metric.
+
+After installing `ProjectIdSummary.gs`, run `setupGoodLeapConditionals()`.
+It upgrades the schema safely, installs the formulas using existing snapshot
+data without new PostHog calls, and repairs Category Explorer references.
+Normal summary refreshes maintain all four formulas for new and existing rows.
+
+Installed and executed in Apps Script on 2026-10-01. All 117 published project
+rows were checked against the current source values, with no mismatches or
+formula errors. There were 93 available yield ratios; missing AC values
+remained blank. A temporary OH minimum change recalculated the check correctly
+and was restored to 1000. A repeated setup completed with the summary unchanged
+and Category Explorer retained seven Equipment results.
+
 ## Architecture
 
 ```text

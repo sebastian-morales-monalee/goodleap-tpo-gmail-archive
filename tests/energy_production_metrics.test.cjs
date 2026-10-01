@@ -65,7 +65,7 @@ assert.ok(context.calculateProjectEnergyMetrics_({...example,
 const schema = vm.runInContext(`({current:PROJECT_ID_SUMMARY_HEADERS,
   previous:LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17,
   energy:PROJECT_ID_SUMMARY_ENERGY_HEADERS})`, context);
-assert.equal(schema.current.length - schema.previous.length, 4);
+assert.equal(schema.current.length - schema.previous.length, 8);
 assert.equal(schema.current.indexOf('active_panel_count'), 6);
 assert.equal(schema.current.indexOf('reference_dc_production_kwh'), 13);
 assert.equal(schema.current.indexOf('Snapshot Date'), 19);
@@ -85,6 +85,46 @@ for (const header of ['Project ID','AI Summary','Categories','Gmail Message ID',
   assert.equal(migrated[schema.current.indexOf(header)], sourceRow[previous.indexOf(header)]);
 }
 assert.equal(migrated[schema.current.indexOf('Snapshot Version ID')], '');
+const snapshotHeaders = vm.runInContext('LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18', context);
+assert.equal(schema.current.length - snapshotHeaders.length, 4);
+assert.deepEqual(Array.from(schema.current.slice(23,27)),
+  ['kWh/kW','kWh/kW >= MIN','Offset <= 110%','110 % < offset ≤ 150 %']);
+assert.equal(schema.current.indexOf('Solar Panel'),27);
+const rules = context.goodLeapConditionalLookup_(context.defaultGoodLeapConditionalRows_());
+assert.equal(rules.size,50); // 49 states plus DC; RI was not supplied.
+assert.equal(rules.has('RI'),false);
+for (const [state,min] of rules) {
+  assert.equal(context.projectIdSummaryConditionalCells_({systemSizeKw:1,
+    estimatedAnnualAcProductionKwh:min},state,rules)[1],true);
+  assert.equal(context.projectIdSummaryConditionalCells_({systemSizeKw:1,
+    estimatedAnnualAcProductionKwh:min-0.001},state,rules)[1],false);
+}
+for (const [offset,standard,band] of [[0,true,false],[110,true,false],
+  [110.001,false,true],[150,false,true],[150.001,false,false]]) {
+  assert.deepEqual(Array.from(context.projectIdSummaryConditionalCells_(
+    {estimatedOffsetPercent:offset},'CT',rules).slice(2)),[standard,band]);
+}
+assert.deepEqual(Array.from(context.projectIdSummaryConditionalCells_({},'CT',rules)),['','','','']);
+assert.equal(context.projectIdSummaryConditionalCells_({systemSizeKw:0,
+  estimatedAnnualAcProductionKwh:900},'CT',rules)[0],'');
+assert.equal(context.projectIdSummaryConditionalCells_({systemSizeKw:1,
+  estimatedAnnualAcProductionKwh:900},'RI',rules)[1],'');
+assert.equal(context.projectIdSummaryConditionalCells_({systemSizeKw:1,
+  estimatedAnnualAcProductionKwh:700},' ct ',rules)[1],true);
+assert.throws(()=>context.goodLeapConditionalLookup_([['CT',700],['CT',800]]),/duplicate/);
+assert.throws(()=>context.goodLeapConditionalLookup_([['CT','']]),/invalid/);
+const formulas=Array.from(context.projectIdSummaryConditionalFormulas_(118,51));
+assert.match(formulas[0],/Q118\/I118/);
+assert.match(formulas[1],/UPPER\(TRIM\(E118\)\)/);
+assert.match(formulas[1],/\$A\$2:\$B\$51/);
+assert.match(formulas[2],/S118<=110/);
+assert.match(formulas[3],/S118>110,S118<=150/);
+const snapshotRow = Array.from(snapshotHeaders, h => `preserved:${h}`);
+context.migrateProjectIdSummarySchema_({getLastRow:()=>2,getRange:()=>({
+  getValues:()=>[snapshotRow],clearContent:()=>{},setValues:rows=>{migrated=rows[0];}})},snapshotHeaders);
+for(const h of ['Snapshot Version ID','Energy Calculation Status','AI Summary','Categories','State']) {
+  assert.equal(migrated[schema.current.indexOf(h)],snapshotRow[snapshotHeaders.indexOf(h)]);
+}
 context.postHogStringLiteral_ = (value) => `'${value}'`;
 const query = context.buildProjectIdSummaryEnergyQuery_(
   ['f8c08b92-ce68-453b-9353-210e41c2d149'], 'goodleap_postgres_projects');

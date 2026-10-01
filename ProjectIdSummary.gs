@@ -233,6 +233,113 @@ const PROJECT_ID_SUMMARY_ENERGY_HEADERS = [
   'Energy Calculation Status',
 ];
 
+const PROJECT_ID_SUMMARY_CONDITIONAL_HEADERS = [
+  'kWh/kW', 'kWh/kW >= MIN', 'Offset <= 110%', '110 % < offset ≤ 150 %',
+];
+const GOODLEAP_CONDITIONALS_SHEET_NAME = 'GoodLeap conditionals';
+const GOODLEAP_CONDITIONALS_HEADERS = ['State', 'MIN kWh/kW'];
+
+function defaultGoodLeapConditionalRows_() {
+  const groups = [
+    [700, 'CT MA MD ME NH DE'],
+    [800, 'AK AL AR AZ CA CO DC FL GA HI IA ID IL IN KS KY LA MN MO MS MT NC ND NE NM NY OK SC SD TN TX UT VA VT WA WI WV WY'],
+    [1000, 'NJ OH PA'], [1050, 'MI'], [1150, 'OR'], [1650, 'NV'],
+  ];
+  return groups.flatMap(([minimum, states]) => states.split(' ').map(state => [state, minimum]))
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function goodLeapConditionalLookup_(rows) {
+  const lookup = new Map();
+  rows.forEach(([rawState, minimum]) => {
+    if (rawState === '' && minimum === '') return;
+    const state = String(rawState || '').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(state) || typeof minimum !== 'number' ||
+      !Number.isFinite(minimum) || minimum <= 0 || lookup.has(state)) {
+      throw new Error('GoodLeap conditionals: invalid or duplicate state/MIN. Review the table before refresh.');
+    }
+    lookup.set(state, minimum);
+  });
+  return lookup;
+}
+
+function getOrCreateGoodLeapConditionalsSheet_(spreadsheet) {
+  let sheet = spreadsheet.getSheetByName(GOODLEAP_CONDITIONALS_SHEET_NAME);
+  if (!sheet) sheet = spreadsheet.insertSheet(GOODLEAP_CONDITIONALS_SHEET_NAME);
+  if (sheet.getLastRow() === 0) {
+    const rows = defaultGoodLeapConditionalRows_();
+    sheet.getRange(1, 1, rows.length + 1, 2)
+      .setValues([GOODLEAP_CONDITIONALS_HEADERS, ...rows]);
+    sheet.getRange(1, 1, 1, 2).setBackground(PROJECT_ID_SUMMARY_CONFIG.HEADER_BACKGROUND)
+      .setFontColor('#ffffff').setFontWeight('bold').setHorizontalAlignment('center');
+    sheet.getRange(2, 2, rows.length, 1).setNumberFormat('#,##0').setBackground('#fff2cc');
+    sheet.setColumnWidth(1, 100);
+    sheet.setColumnWidth(2, 160);
+    sheet.setFrozenRows(1);
+    sheet.setHiddenGridlines(true);
+    sheet.getRange('D1').setValue('Source: user-provided GoodLeap System Specifications image, 2026-10-01.');
+    sheet.getRange('D2').setValue('RI is not listed in the supplied image. Unmapped states remain blank.');
+    sheet.getRange('D3').setValue('Offset band is a numeric check only, not approval of an exception or signed form.');
+    sheet.setColumnWidth(4, 690);
+  }
+  if (!projectIdSummaryHeadersMatch_(sheet.getRange(1, 1, 1, 2).getDisplayValues()[0],
+    GOODLEAP_CONDITIONALS_HEADERS)) throw new Error('Unexpected GoodLeap conditionals headers.');
+  goodLeapConditionalLookup_(sheet.getLastRow() > 1 ?
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues() : []);
+  return sheet;
+}
+
+function projectIdSummaryConditionalCells_(metrics, state, lookup) {
+  const numeric = value => typeof value === 'number' && Number.isFinite(value);
+  const production = metrics.estimatedAnnualAcProductionKwh;
+  const size = metrics.systemSizeKw;
+  const offset = metrics.estimatedOffsetPercent;
+  const yieldKwh = numeric(production) && numeric(size) && size !== 0 ? production / size : '';
+  const minimum = lookup.get(String(state || '').trim().toUpperCase());
+  return [yieldKwh, yieldKwh !== '' && numeric(minimum) ? yieldKwh >= minimum : '',
+    numeric(offset) ? offset <= 110 : '', numeric(offset) ? offset > 110 && offset <= 150 : ''];
+}
+
+function projectIdSummaryConditionalFormulas_(row, lookupLastRow) {
+  const columnLetter = header => {
+    let column = projectIdSummaryColumn_(header), result = '';
+    while (column > 0) { column--; result = String.fromCharCode(65 + column % 26) + result; column = Math.floor(column / 26); }
+    return result;
+  };
+  const cell = header => `${columnLetter(header)}${row}`;
+  const size = cell('system_size_kw'), production = cell('estimated_annual_ac_production_kwh');
+  const yieldCell = cell('kWh/kW'), state = cell('State'), offset = cell('estimated_offset_percent');
+  const table = `'${GOODLEAP_CONDITIONALS_SHEET_NAME}'!$A$2:$B$${Math.max(2, lookupLastRow)}`;
+  const minimum = `VLOOKUP(UPPER(TRIM(${state})),${table},2,FALSE)`;
+  return [
+    `=IF(AND(ISNUMBER(${production}),ISNUMBER(${size}),${size}<>0),${production}/${size},"")`,
+    `=IF(ISNUMBER(${yieldCell}),IFNA(IF(${minimum}>0,${yieldCell}>=${minimum},""),""),"")`,
+    `=IF(ISNUMBER(${offset}),${offset}<=110,"")`,
+    `=IF(ISNUMBER(${offset}),AND(${offset}>110,${offset}<=150),"")`,
+  ];
+}
+
+function applyProjectIdSummaryConditionalFormulas_(sheet, rowCount, lookupLastRow) {
+  if (!rowCount) return;
+  const formulas = Array.from({length: rowCount}, (_, i) =>
+    projectIdSummaryConditionalFormulas_(i + 2, lookupLastRow));
+  sheet.getRange(2, projectIdSummaryColumn_('kWh/kW'), rowCount, 4).setFormulas(formulas);
+}
+
+/** Install the four checks using existing snapshot values, without new PostHog calls. */
+function setupGoodLeapConditionals() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return {skippedBecauseLocked: true};
+  try {
+    const spreadsheet = getOrCreateResources_().spreadsheet;
+    const result = refreshProjectIdSummaryForSpreadsheet_(spreadsheet, {refreshMapData: false});
+    if (typeof setupCategoryExplorer === 'function') result.categoryExplorer = setupCategoryExplorer();
+    SpreadsheetApp.flush();
+    console.log(JSON.stringify(result));
+    return result;
+  } finally { lock.releaseLock(); }
+}
+
 const LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_V9 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS.slice(0, 2).concat(
     PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS,
@@ -251,6 +358,7 @@ const LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY = [
 const PROJECT_ID_SUMMARY_BASE_HEADERS =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.slice(0, 6).concat(
     PROJECT_ID_SUMMARY_ENERGY_HEADERS,
+    PROJECT_ID_SUMMARY_CONDITIONAL_HEADERS,
     LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.slice(6),
   );
 
@@ -287,7 +395,10 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 
-const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17 = PROJECT_ID_SUMMARY_HEADERS.filter(
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18 = PROJECT_ID_SUMMARY_HEADERS.filter(
+  header => !PROJECT_ID_SUMMARY_CONDITIONAL_HEADERS.includes(header),
+);
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17 = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18.filter(
   (header) => !['Snapshot Date', 'Snapshot Version ID', 'Snapshot Engine Version',
     'Energy Calculation Status'].includes(header),
 );
@@ -651,6 +762,9 @@ function refreshProjectIdSummarySafely_(spreadsheet, options) {
 }
 
 function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
+  const conditionalsSheet = getOrCreateGoodLeapConditionalsSheet_(spreadsheet);
+  const conditionalLookup = goodLeapConditionalLookup_(conditionalsSheet.getLastRow() > 1 ?
+    conditionalsSheet.getRange(2, 1, conditionalsSheet.getLastRow() - 1, 2).getValues() : []);
   const stateRegionsSheet =
     getOrCreateProjectIdSummaryStateRegionsSheet_(spreadsheet);
   const stateRegionLookup =
@@ -671,6 +785,7 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
     existingProjectMetadata,
     stateRegionLookup,
     statusOrderLookup,
+    conditionalLookup,
   });
   const existingRows = loadExistingProjectIdSummaryRows_(sheet);
   const unchanged = projectIdSummaryRowsEqual_(existingRows, summary.rows);
@@ -678,6 +793,7 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
   if (!unchanged) {
     rewriteProjectIdSummaryRows_(sheet, summary.rows);
   }
+  applyProjectIdSummaryConditionalFormulas_(sheet, summary.rows.length, conditionalsSheet.getLastRow());
 
   const result = buildProjectIdSummaryStats_(summary);
   result.sheet = PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME;
@@ -691,6 +807,8 @@ function refreshProjectIdSummaryForSpreadsheet_(spreadsheet, options) {
 }
 
 function buildProjectIdSummary_(spreadsheet, options) {
+  const conditionalLookup = options && options.conditionalLookup ||
+    goodLeapConditionalLookup_(defaultGoodLeapConditionalRows_());
   const projects = loadProjectIdSummaryBaseProjects_(spreadsheet);
   const pdfApplicationIds =
     loadProjectIdSummaryPdfApplicationIds_(spreadsheet);
@@ -813,6 +931,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       projectMetadata.state || '',
       getProjectIdSummaryRegion_(projectMetadata.state, stateRegionLookup),
       ...projectEnergyMetricCells_(energyMetrics),
+      ...projectIdSummaryConditionalCells_(energyMetrics, projectMetadata.state, conditionalLookup),
       projectMetadata.solarPanel || '',
       projectMetadata.inverter || '',
       projectMetadata.installer || '',
@@ -2291,7 +2410,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16,
-    ) && !projectIdSummaryHeadersMatch_(currentHeaders, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17);
+    ) && !projectIdSummaryHeadersMatch_(currentHeaders, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17)
+      && !projectIdSummaryHeadersMatch_(currentHeaders, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18);
   if (hasUnexpectedContent) {
     throw new Error(
       'Project ID Summary already exists with an unexpected schema. ' +
@@ -2536,6 +2656,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     migrateProjectIdSummarySchema_(sheet, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17);
     console.log('Project ID Summary upgraded: snapshot provenance added safely.');
   }
+  if (projectIdSummaryHeadersMatch_(currentHeaders, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18)) {
+    migrateProjectIdSummarySchema_(sheet, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18);
+    console.log('Project ID Summary upgraded: four GoodLeap conditional columns added after Energy Calculation Status.');
+  }
 
   sheet
     .getRange(1, 1, 1, PROJECT_ID_SUMMARY_HEADERS.length)
@@ -2588,6 +2712,10 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(projectIdSummaryColumn_('Snapshot Date'), 180);
   sheet.setColumnWidth(projectIdSummaryColumn_('Snapshot Version ID'), 280);
   sheet.setColumnWidth(projectIdSummaryColumn_('Energy Calculation Status'), 420);
+  PROJECT_ID_SUMMARY_CONDITIONAL_HEADERS.forEach(header =>
+    sheet.setColumnWidth(projectIdSummaryColumn_(header), header === 'kWh/kW' ? 140 : 180));
+  // These requested outputs must remain visible even if the old column at AA was hidden.
+  sheet.showColumns(projectIdSummaryColumn_('kWh/kW'), 4);
   sheet.setColumnWidths(projectIdSummaryColumn_('Solar Panel'), 2, 220);
   sheet.setColumnWidths(projectIdSummaryColumn_('Installer'), 2, 180);
   sheet.setColumnWidths(projectIdSummaryColumn_('Email Count'), 3, 135);
@@ -2754,6 +2882,9 @@ function applyProjectIdSummaryWrap_(sheet) {
 
 function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   if (rowCount < 1) return;
+  sheet.getRange(startRow, projectIdSummaryColumn_('kWh/kW'), rowCount, 1).setNumberFormat('#,##0.00');
+  sheet.getRange(startRow, projectIdSummaryColumn_('kWh/kW >= MIN'), rowCount, 3)
+    .setNumberFormat('General').setHorizontalAlignment('center');
 
   PROJECT_ID_SUMMARY_PROJECT_DETAIL_HEADERS.forEach((header) => {
     sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
