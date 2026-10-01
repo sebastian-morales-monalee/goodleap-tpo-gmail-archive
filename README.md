@@ -18,6 +18,19 @@ No web-app deployment is required.
 
 ## GoodLeap conditional columns
 
+Y/Z/AA use live conditional formatting: boolean TRUE has the same light green
+as AX (`#b7e1cd`), FALSE has light red (`#f4cccc`), and blanks stay white.
+`setupProjectIdSummaryBooleanColors()` installs only these styles, without
+rewriting formulas or data. Each summary refresh maintains the two rules and
+extends their range to the available rows while preserving unrelated rules.
+
+Energy columns use display-only precision on every Project ID Summary refresh:
+panel/inverter watts and annual consumption are integers, system kW and inverter
+efficiency have two decimals, and reference DC/estimated AC kWh have one decimal.
+System kW is black, normal text without underline or hyperlink styling. Stored
+values retain full precision. `setupProjectIdSummaryEnergyFormatting()` reapplies
+these styles to existing rows without fetching or rewriting data.
+
 `AI Dashboard` includes a native `GoodLeap Project Conditions` column chart,
 in this order: Total Projects, kWh/kW ≥ MIN AND Offset ≤ 110%, Projects with
 Missing Data, and kWh/kW ≥ MIN AND 110% < Offset ≤ 150%. Its formula-backed

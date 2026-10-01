@@ -324,6 +324,43 @@ function applyProjectIdSummaryConditionalFormulas_(sheet, rowCount, lookupLastRo
   const formulas = Array.from({length: rowCount}, (_, i) =>
     projectIdSummaryConditionalFormulas_(i + 2, lookupLastRow));
   sheet.getRange(2, projectIdSummaryColumn_('kWh/kW'), rowCount, 4).setFormulas(formulas);
+  applyProjectIdSummaryBooleanColors_(sheet);
+}
+
+/** Install live boolean colors without changing values or formulas. */
+function setupProjectIdSummaryBooleanColors() {
+  const sheet = getOrCreateResources_().spreadsheet
+    .getSheetByName(PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME);
+  if (!sheet) throw new Error('Project ID Summary is missing.');
+  applyProjectIdSummaryBooleanColors_(sheet);
+  SpreadsheetApp.flush();
+  console.log(JSON.stringify({sheet: sheet.getName(), rowsStyled: Math.max(0, sheet.getLastRow() - 1)}));
+}
+
+function applyProjectIdSummaryBooleanColors_(sheet) {
+  const column = projectIdSummaryColumn_('kWh/kW >= MIN');
+  const rows = sheet.getMaxRows() - 1;
+  if (rows < 1) return;
+  const range = sheet.getRange(2, column, rows, 3);
+  const cell = range.getA1Notation().split(':')[0];
+  const formulas = ['TRUE', 'FALSE'].map(value =>
+    `=AND(ISLOGICAL(${cell}),${cell}=${value})`);
+  // Replace only our two rules; preserve unrelated conditional formatting.
+  const retained = sheet.getConditionalFormatRules().filter(rule => {
+    const condition = rule.getBooleanCondition();
+    if (!condition || condition.getCriteriaType() !== SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA ||
+      !formulas.includes(String(condition.getCriteriaValues()[0]))) return true;
+    const ranges = rule.getRanges();
+    return !(ranges.length === 1 && ranges[0].getRow() === 2 &&
+      ranges[0].getColumn() === column && ranges[0].getNumColumns() === 3);
+  });
+  range.setBackground('#ffffff').setFontColor('#000000');
+  const colors = [PROJECT_ID_SUMMARY_CONFIG.TOLERANCE_TRUE_BACKGROUND,
+    PROJECT_ID_SUMMARY_CONFIG.TOLERANCE_FALSE_BACKGROUND];
+  const rules = formulas.map((formula, index) => SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(formula).setBackground(colors[index])
+    .setFontColor('#000000').setRanges([range]).build());
+  sheet.setConditionalFormatRules([...retained, ...rules]);
 }
 
 /** Install the four checks using existing snapshot values, without new PostHog calls. */
@@ -2880,6 +2917,40 @@ function applyProjectIdSummaryWrap_(sheet) {
     .setWrap(true);
 }
 
+/** Reapply display styles only, without fetching data or rewriting values. */
+function setupProjectIdSummaryEnergyFormatting() {
+  const spreadsheet = getOrCreateResources_().spreadsheet;
+  const sheet = spreadsheet.getSheetByName(PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME);
+  if (!sheet) throw new Error('Project ID Summary is missing.');
+  const rowCount = Math.max(0, sheet.getLastRow() - 1);
+  formatProjectIdSummaryEnergyRows_(sheet, 2, rowCount);
+  SpreadsheetApp.flush();
+  console.log(JSON.stringify({sheet: sheet.getName(), rowsFormatted: rowCount, valuesChanged: false}));
+}
+
+function formatProjectIdSummaryEnergyRows_(sheet, startRow, rowCount) {
+  if (rowCount < 1) return;
+  const formats = {
+    panel_rated_power_w: '#,##0',
+    system_size_kw: '#,##0.00',
+    inverter_nominal_ac_power_w: '#,##0',
+    inverter_max_efficiency_percent: '#,##0.00',
+    reference_dc_production_kwh: '#,##0.0',
+    estimated_annual_ac_production_kwh: '#,##0.0',
+    'Annual Energy Consumption kWh': '#,##0',
+  };
+  PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
+    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
+      .setNumberFormat(formats[header] || (header === 'Snapshot Date' ? PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT :
+        ['Inverter Type', 'Snapshot Version ID', 'Snapshot Engine Version',
+          'Energy Calculation Status'].includes(header) ? '@' : header.endsWith('_count') ||
+        header === 'estimated_offset_percent' ? '#,##0' : '#,##0.000000'));
+  });
+  sheet.getRange(startRow, projectIdSummaryColumn_('system_size_kw'), rowCount, 1)
+    .setShowHyperlink(false).setFontColor('#000000').setFontLine('none')
+    .setFontStyle('normal').setFontWeight('normal');
+}
+
 function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   if (rowCount < 1) return;
   sheet.getRange(startRow, projectIdSummaryColumn_('kWh/kW'), rowCount, 1).setNumberFormat('#,##0.00');
@@ -2890,13 +2961,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
       .setBackground('#ffffff').setNumberFormat('@').setWrap(true);
   });
-  PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
-    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
-      .setNumberFormat(header === 'Snapshot Date' ? PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT :
-        ['Inverter Type', 'Snapshot Version ID', 'Snapshot Engine Version',
-          'Energy Calculation Status'].includes(header) ? '@' : header.endsWith('_count') ||
-        header === 'estimated_offset_percent' ? '#,##0' : '#,##0.000000');
-  });
+  formatProjectIdSummaryEnergyRows_(sheet, startRow, rowCount);
   sheet
     .getRange(
       startRow,
