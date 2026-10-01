@@ -2,180 +2,133 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-
-const source = fs.readFileSync(
-  path.join(__dirname, '..', 'EnergyProductionMetrics.gs'), 'utf8',
-);
-const context = vm.createContext({ console, Math, JSON, Number, String });
-vm.runInContext(source, context);
-
+const context = vm.createContext({console});
+for (const file of ['EnergyProductionMetrics.gs', 'ProjectIdSummary.gs']) {
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
+}
 const example = {
-  activePanelCount: 22,
-  projectActivePanelCount: 22,
-  panelRatedPowerW: 430,
-  referenceDcProductionKwh: 12704.415322428453,
-  selectedInverterJson: JSON.stringify({
-    brand: 'ENPHASE',
-    models: [{ model: 'IQ8HC microinverter',
-      nominalACPowerOutputW: 380, maxEfficiencyPercentage: 97.3 }],
-  }),
-  inverterModelOverride: null,
-  inverterCountOverride: null,
-  inverterType: 'micro',
-  panelsWithDiurnalShape: 0,
-  activeHomeApplianceCount: 0,
-  annualEnergyUseAcKwh: 13447,
-  productionEngineVersion: '3',
+  snapshotVersionId: 'aa604b23-fc06-49c0-a7b7-4ad7323344cf',
+  snapshotDate: '2026-09-21T18:05:04.888-05:00',
+  activePanelCount: 9, projectActivePanelCount: 9,
+  panelRatedPowerW: 430, referenceDcProductionKwh: 3842.675949950245,
+  selectedInverterJson: JSON.stringify({models: [{
+    model: 'GL_ENPH1_IQ8HC-72-M-DOM-US (380 W)',
+    nominalACPowerOutputW: 0, ratedACPowerW: 380, maxEfficiencyPercentage: null,
+  }]}),
+  catalogNominalAcPowerW: 380, catalogEfficiencyPercent: 97.3,
+  inverterCountOverride: 9, inverterType: 'micro',
+  panelsMissingProduction: 0, panelsWithDiurnalShape: 0,
+  annualEnergyUseAcKwh: 5902, productionEngineVersion: '2',
 };
 const actual = context.calculateProjectEnergyMetrics_(example);
-assert.equal(actual.activePanelCount, 22);
-assert.equal(actual.inverterCount, 22);
-assert.equal(actual.systemSizeKw, 9.46);
-assert.ok(Math.abs(actual.dcAcRatio - 1.131578947) < 1e-8);
-assert.ok(Math.abs(actual.dcAcCorrectionFactor - 1.000757895) < 1e-8);
-assert.ok(Math.abs(actual.estimatedAnnualAcProductionKwh - 13298.572102) < 0.001);
-assert.equal(Math.round(actual.estimatedAnnualAcProductionKwh), 13299);
-assert.equal(actual.estimatedOffsetPercent, 98);
-
-vm.runInContext(fs.readFileSync(
-  path.join(__dirname, '..', 'ProjectIdSummary.gs'), 'utf8',
-), context);
-const schema = vm.runInContext(`({
-  current: PROJECT_ID_SUMMARY_HEADERS,
-  previous: LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16,
-  energy: PROJECT_ID_SUMMARY_ENERGY_HEADERS,
-})`, context);
-assert.equal(schema.current.length - schema.previous.length, 13);
-assert.equal(schema.current.indexOf('active_panel_count'),
-  schema.current.indexOf('Region') + 1);
-assert.equal(schema.current.filter((header) =>
-  header === 'Engine Version').length, 1);
-assert.equal(schema.current.indexOf('Solar Panel'),
-  schema.current.indexOf('Region') + schema.energy.length + 1);
+assert.equal(actual.activePanelCount, 9);
+assert.equal(actual.inverterCount, 9);
+assert.equal(actual.systemSizeKw, 3.87);
+assert.ok(Math.abs(actual.estimatedAnnualAcProductionKwh - 4022.389215636849) < 0.001);
+assert.equal(actual.estimatedOffsetPercent, 68);
+assert.match(actual.energyCalculationStatus, /catalog fallback/);
+assert.equal(actual.snapshotDate.toISOString(), '2026-09-21T23:05:04.888Z');
+const sales = context.calculateProjectEnergyMetrics_({...example,
+  snapshotVersionId: '80c4c67b-d2cf-4809-ada2-42df895ec044',
+  activePanelCount: 20, projectActivePanelCount: 20, inverterCountOverride: null,
+  referenceDcProductionKwh: 11473.880950039056,
+  selectedInverterJson: JSON.stringify({models: [{
+    nominalACPowerOutputW: 11500, maxEfficiencyPercentage: 97.5,
+  }]}), inverterType: 'string', annualEnergyUseAcKwh: 8433,
+});
+assert.equal(sales.activePanelCount, 20);
+assert.equal(sales.inverterCount, 1);
+assert.equal(sales.systemSizeKw, 8.6);
+assert.ok(Math.abs(sales.estimatedAnnualAcProductionKwh - 11995.002859830853) < 0.001);
+assert.equal(sales.estimatedOffsetPercent, 142);
+assert.equal(sales.energyCalculationStatus, 'Calculated from latest saved snapshot');
+// An override affects physical inverter count, never the DC panel selection.
+assert.equal(context.calculateProjectEnergyMetrics_({...example,
+  inverterCountOverride: 10}).activePanelCount, 9);
+assert.equal(context.calculateProjectEnergyMetrics_({...example,
+  inverterCountOverride: 0}).inverterCount, null);
+assert.equal(context.calculateProjectEnergyMetrics_({...example,
+  inverterCountOverride: null}).inverterCount, 9);
+for (const change of [{panelsMissingProduction: 1}, {panelsWithDiurnalShape: 1},
+  {productionEngineVersion: '1'}, {inverterType: ''}]) {
+  assert.equal(context.calculateProjectEnergyMetrics_({...example, ...change})
+    .estimatedAnnualAcProductionKwh, null);
+}
+assert.equal(context.calculateProjectEnergyMetrics_({...example,
+  snapshotVersionId: null}).activePanelCount, undefined);
+assert.match(context.calculateProjectEnergyMetrics_({...example,
+  snapshotVersionId: null}).energyCalculationStatus, /No saved snapshot/);
+assert.equal(context.calculateProjectEnergyMetrics_({...example,
+  annualEnergyUseAcKwh: 0}).estimatedOffsetPercent, null);
+assert.ok(context.calculateProjectEnergyMetrics_({...example,
+  projectActivePanelCount: 38}).referenceDcProductionKwh > 0);
+const schema = vm.runInContext(`({current:PROJECT_ID_SUMMARY_HEADERS,
+  previous:LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17,
+  energy:PROJECT_ID_SUMMARY_ENERGY_HEADERS})`, context);
+assert.equal(schema.current.length - schema.previous.length, 4);
+assert.equal(schema.current.indexOf('active_panel_count'), 6);
+assert.equal(schema.current.indexOf('reference_dc_production_kwh'), 13);
+assert.equal(schema.current.indexOf('Snapshot Date'), 19);
+assert.equal(context.projectEnergyMetricCells_(actual).length, schema.energy.length);
+// Schema migration shifts only by header name, preserving email/category fields.
+let migrated;
+const previous = Array.from(schema.previous);
+const sourceRow = previous.map((header) => `saved:${header}`);
+sourceRow[previous.indexOf('Proposed Production kWh')] = 100;
+sourceRow[previous.indexOf('Benchmark Production kWh')] = 100;
+context.setProjectIdSummaryRichLinks_ = () => {};
+context.migrateProjectIdSummarySchema_({getLastRow: () => 2,
+  getRange: () => ({getValues: () => [sourceRow], clearContent: () => {},
+    setValues: (rows) => {migrated=rows[0];}})}, schema.previous);
+for (const header of ['Project ID','AI Summary','Categories','Gmail Message ID',
+  'Required Evidence','Technical Notes','Annual Energy Consumption kWh']) {
+  assert.equal(migrated[schema.current.indexOf(header)], sourceRow[previous.indexOf(header)]);
+}
+assert.equal(migrated[schema.current.indexOf('Snapshot Version ID')], '');
 context.postHogStringLiteral_ = (value) => `'${value}'`;
 const query = context.buildProjectIdSummaryEnergyQuery_(
-  ['d4261513-53c6-4740-ab32-c9f808b0e491'],
-  'goodleap_postgres_projects',
-);
-assert.ok(query.includes('goodleap_postgres_pricingversions'));
-assert.ok(query.includes('goodleap_postgres_solarpanels'));
-assert.ok(!query.includes('projecthomeappliances'));
-assert.ok(query.includes('panel_annual_prod_dckwh'));
-assert.ok(query.includes("'capacity_watts'"));
+  ['f8c08b92-ce68-453b-9353-210e41c2d149'], 'goodleap_postgres_projects');
+assert.match(query, /goodleap_postgres_projectversions/);
+assert.match(query, /PARTITION BY project_id, organization_id/);
+assert.match(query, /ORDER BY created_at DESC, id DESC/);
+assert.match(query, /v.organization_id = p.organization_id/);
+assert.match(query, /pv.id = v.pricing_version_id/);
+assert.match(query, /v.inverter_type_id/);
+assert.match(query, /panelAnnualProdDckwh/);
+assert.match(query, /'null', '\[\]'/);
+assert.ok(!query.includes('solarpanels'));
 assert.ok(!query.includes('panel_capacity_watts'));
-
-assert.equal(context.calculateProjectEnergyMetrics_({
-  ...example, inverterCountOverride: 2,
-}).inverterCount, 2);
-assert.equal(context.calculateProjectEnergyMetrics_({
-  ...example, inverterType: 'string', selectedInverterJson: JSON.stringify({brand: 'OTHER', models: [
-    {model: 'String inverter', nominalACPowerOutputW: 380,
-      maxEfficiencyPercentage: 97.3},
-  ]}),
-}).inverterCount, 1);
-assert.equal(context.calculateProjectEnergyMetrics_({...example, inverterType: ''}).inverterCount, null);
-assert.equal(actual.annualEnergyConsumptionKwh, 13447);
-assert.equal(context.calculateProjectEnergyMetrics_({
-  ...example, panelsWithDiurnalShape: 1,
-}).estimatedAnnualAcProductionKwh, null);
-assert.equal(context.calculateProjectEnergyMetrics_({
-  ...example, activeHomeApplianceCount: 1,
-}).estimatedOffsetPercent, 98);
-assert.equal(context.calculateProjectEnergyMetrics_({
-  ...example, productionEngineVersion: '1',
-}).estimatedAnnualAcProductionKwh, null);
-
-// A source-specific catalogue lookup, not the inverter brand, determines type.
+const selected = {model: {model: 'EXAMPLE (11500 W)'}};
+const catalog = [{id:'one', model_number:'EXAMPLE', count_strategy:'string'},
+  {id:'two', model_number:'EXAMPLE', count_strategy:'STRING'}];
+assert.equal(context.projectEnergyResolveCatalogModel_(selected, catalog).count_strategy, 'string');
+assert.equal(context.projectEnergyResolveCatalogModel_(selected,
+  [catalog[0], {...catalog[1], count_strategy:'micro'}]), null);
 context.getPostHogSolarSettings_ = () => ({
-  goodLeapProjectsTable: 'goodleap_postgres_projects',
-  artemisSalesProjectsTable: 'artemis_sales_postgres_projects',
+  goodLeapProjectsTable:'goodleap_postgres_projects',
+  artemisSalesProjectsTable:'artemis_sales_postgres_projects',
 });
 context.chunkPostHogArray_ = (items) => [items];
-const exampleId = 'd4261513-53c6-4740-ab32-c9f808b0e491';
-const modelId = '6b16431f-b6a0-4b7d-853c-1014307fdf0a';
-const calls = [];
+const id = 'f8c08b92-ce68-453b-9353-210e41c2d149';
+let calls = [];
 context.executePostHogHogQL_ = (sql) => {
   calls.push(sql);
-  if (sql.includes('invertermodels')) return {
-    columns: ['id', 'model_number', 'count_strategy', 'nominal_ac_power_output_w',
-      'max_efficiency_percentage'], results: [[modelId, 'EXAMPLE', 'micro', 380, 97.3]],
-  };
-  if (sql.includes('FROM goodleap_postgres_projects AS p')) return {
-    columns: ['project_id'], results: [],
-  };
-  return {
-    columns: ['project_id', 'active_panel_count', 'panel_rated_power_w',
-      'reference_dc_production_kwh', 'selected_inverter_json',
-      'inverter_model_override', 'inverter_count_override',
-      'panels_with_diurnal_shape', 'annual_energy_use_ackwh',
-      'production_engine_version', 'project_active_panel_count'],
-    results: [[exampleId, 22, 430, example.referenceDcProductionKwh,
-      JSON.stringify({brand: 'Not used to infer type', models: [{id: modelId,
-        nominalACPowerOutputW: 380, maxEfficiencyPercentage: 97.3}]}),
-      null, null, 0, 13447, '3', 22]],
-  };
+  if (sql.includes('invertermodels')) return {columns:['id','model_number','count_strategy',
+    'nominal_ac_power_output_w','max_efficiency_percentage'],
+    results:[['model','GL_ENPH1_IQ8HC-72-M-DOM-US','micro',380,97.3]]};
+  if (sql.includes('FROM goodleap_postgres_projects AS p')) return {columns:['project_id'],results:[]};
+  return {columns:['project_id','snapshot_version_id','snapshot_date','active_panel_count',
+    'project_active_panel_count','panel_rated_power_w','reference_dc_production_kwh',
+    'selected_inverter_json','inverter_count_override','panels_with_diurnal_shape',
+    'annual_energy_use_ackwh','production_engine_version','panels_missing_production'],
+  results:[[id,example.snapshotVersionId,example.snapshotDate,9,9,430,
+    example.referenceDcProductionKwh,example.selectedInverterJson,9,0,5902,'2',0]]};
 };
-const fallback = context.fetchProjectIdSummaryEnergyMetrics_([exampleId]).get(exampleId);
-assert.equal(fallback.inverterType, 'micro');
-assert.equal(fallback.inverterCount, 22);
-assert.equal(fallback.estimatedOffsetPercent, 98);
-assert.ok(calls.some((sql) => sql.includes('artemis_sales_postgres_invertermodels')));
-
-const corrected = context.calculateProjectEnergyMetrics_({
-  ...example, activePanelCount: 65, projectActivePanelCount: 22,
-});
-assert.equal(corrected.activePanelCount, 22);
-assert.equal(corrected.inverterCount, 22);
-assert.equal(corrected.systemSizeKw, 9.46);
-assert.equal(corrected.referenceDcProductionKwh, null);
-assert.equal(corrected.estimatedAnnualAcProductionKwh, null);
-assert.equal(corrected.estimatedOffsetPercent, null);
-const overrideCorrected = context.calculateProjectEnergyMetrics_({
-  ...example, activePanelCount: 45, projectActivePanelCount: 10,
-  inverterCountOverride: 10, panelRatedPowerW: 435,
-});
-assert.equal(overrideCorrected.activePanelCount, 10);
-assert.equal(overrideCorrected.systemSizeKw, 4.35);
-assert.equal(context.calculateProjectEnergyMetrics_({
-  ...example, inverterType: 'string', inverterCountOverride: 7,
-}).inverterCount, 1);
-assert.equal(context.calculateProjectEnergyMetrics_({
-  ...example, projectActivePanelCount: null,
-}).inverterCount, null);
-const legacySelected = {model: {model: 'GL_ENPH1_IQ8HC-72-M-DOM-US (380 W)'}};
-const catalogModel = {id: modelId, model_number: 'GL_ENPH1_IQ8HC-72-M-DOM-US'};
-assert.equal(context.projectEnergyResolveCatalogModel_(legacySelected, [catalogModel]), catalogModel);
-assert.equal(context.projectEnergyResolveCatalogModel_(legacySelected, [catalogModel, catalogModel]), null);
-const teslaSelected = {model: {model: 'Tesla Powerwall 3 (integrated inverter) (1707000-21) (11500 W)'}};
-const teslaCatalog = [
-  {id: 'one', model_number: 'Tesla Powerwall 3 (integrated inverter) (1707000-21)',
-    count_strategy: 'string', nominal_ac_power_output_w: 11500, max_efficiency_percentage: 97.5},
-  {id: 'two', model_number: 'Tesla Powerwall 3 (integrated inverter) (1707000-21)',
-    count_strategy: ' STRING ', nominal_ac_power_output_w: null, max_efficiency_percentage: null},
-];
-const agreedType = context.projectEnergyResolveCatalogModel_(teslaSelected, teslaCatalog);
-assert.equal(agreedType.count_strategy, 'string');
-assert.equal(agreedType.nominal_ac_power_output_w, undefined);
-assert.equal(context.projectEnergyResolveCatalogModel_(teslaSelected,
-  [teslaCatalog[0], {...teslaCatalog[1], count_strategy: 'micro'}]), null);
-assert.equal(context.projectEnergyResolveCatalogModel_(teslaSelected,
-  [teslaCatalog[0], {...teslaCatalog[1], count_strategy: null}]), null);
-const teslaMetrics = context.calculateProjectEnergyMetrics_({
-  ...example, activePanelCount: 20, projectActivePanelCount: 20,
-  selectedInverterJson: JSON.stringify({models: [{...teslaSelected.model,
-    nominalACPowerOutputW: 11500, maxEfficiencyPercentage: 97.5}]}),
-  inverterType: agreedType.count_strategy,
-});
-assert.equal(teslaMetrics.inverterType, 'string');
-assert.equal(teslaMetrics.inverterCount, 1);
-assert.equal(teslaMetrics.inverterNominalAcPowerW, 11500);
-assert.equal(teslaMetrics.inverterMaxEfficiencyPercent, 97.5);
-const legacyMetrics = context.calculateProjectEnergyMetrics_({
-  ...example, selectedInverterJson: JSON.stringify({models: [
-    {model: 'Legacy model', nominalACPowerOutputW: 0, maxEfficiencyPercentage: null},
-  ]}), catalogNominalAcPowerW: 380, catalogEfficiencyPercent: 97.3,
-});
-assert.equal(legacyMetrics.inverterNominalAcPowerW, 380);
-assert.equal(legacyMetrics.inverterMaxEfficiencyPercent, 97.3);
-
-console.log('Energy production metric tests passed.');
+assert.equal(context.fetchProjectIdSummaryEnergyMetrics_([id]).get(id).estimatedOffsetPercent,68);
+assert.ok(calls.some((sql) => sql.includes('artemis_sales_postgres_projectversions')));
+calls = [];
+context.executePostHogHogQL_ = (sql) => {calls.push(sql);throw Error('test failure');};
+assert.match(context.fetchProjectIdSummaryEnergyMetrics_([id]).get(id)
+  .energyCalculationStatus,/query failed/);
+assert.equal(calls.length,1);
+console.log('Snapshot energy metric tests passed.');

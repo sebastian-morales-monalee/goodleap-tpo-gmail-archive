@@ -1,5 +1,5 @@
 /**
- * Conservative Artemis V2/V3 energy metrics for Project ID Summary.
+ * Artemis V2/V3 energy metrics from the latest saved ProjectVersion.
  * A missing source or an ambiguous physical inverter count produces a blank
  * derived metric, never a guessed value. The source panel_capacity_watts field
  * is intentionally not used: it is not the panel's rated power.
@@ -69,6 +69,9 @@ function projectEnergyResolveCatalogModel_(selected, catalog) {
 }
 
 function calculateProjectEnergyMetrics_(source) {
+  if (!source.snapshotVersionId) return {
+    energyCalculationStatus: source.errorReason || 'No saved snapshot found',
+  };
   const rawPanelCount = projectEnergyFinitePositive_(
     source.activePanelCount,
   );
@@ -78,25 +81,27 @@ function calculateProjectEnergyMetrics_(source) {
     source.selectedInverterJson,
     source.inverterModelOverride,
   );
-  const inverterW = (selected && projectEnergyFinitePositive_(
+  const pricingInverterW = selected && (projectEnergyFinitePositive_(
     selected.model.nominalACPowerOutputW,
-  )) || projectEnergyFinitePositive_(source.catalogNominalAcPowerW);
-  const efficiency = (selected && projectEnergyFinitePositive_(
+  ) || projectEnergyFinitePositive_(selected.model.ratedACPowerW));
+  const inverterW = pricingInverterW || projectEnergyFinitePositive_(source.catalogNominalAcPowerW);
+  const pricingEfficiency = selected && projectEnergyFinitePositive_(
     selected.model.maxEfficiencyPercentage,
-  )) || projectEnergyFinitePositive_(source.catalogEfficiencyPercent);
+  );
+  const efficiency = pricingEfficiency || projectEnergyFinitePositive_(source.catalogEfficiencyPercent);
   const overrideCount = projectEnergyFinitePositive_(
     source.inverterCountOverride,
   );
   const inverterType = String(source.inverterType || '').trim().toLowerCase();
   const inverterCount = inverterType === 'micro'
-    ? overrideCount || projectPanelCount
+    ? (source.inverterCountOverride === null || source.inverterCountOverride === undefined ||
+      source.inverterCountOverride === '' ? rawPanelCount : overrideCount)
     : inverterType ? 1 : null;
-  const activePanelCount = inverterType === 'micro'
-    ? inverterCount : inverterType ? rawPanelCount : projectPanelCount;
-  // Count correction does not select the individual records to sum for DC.
-  const panelRecordsMatch = Boolean(activePanelCount && rawPanelCount &&
-    activePanelCount === rawPanelCount &&
-    (!projectPanelCount || projectPanelCount === rawPanelCount));
+  // Both count and DC now refer to the same active records in one saved version.
+  // An inverter override must not change which solar-panel records are summed.
+  const activePanelCount = rawPanelCount;
+  const panelRecordsMatch = Boolean(activePanelCount &&
+    Number(source.panelsMissingProduction || 0) === 0);
   const referenceDcKwh = panelRecordsMatch
     ? projectEnergyFinitePositive_(source.referenceDcProductionKwh) : null;
   const systemSizeKw = activePanelCount && ratedW
@@ -119,6 +124,22 @@ function calculateProjectEnergyMetrics_(source) {
   const estimatedOffset = estimatedAcKwh !== null && annualConsumption
     ? Math.trunc(estimatedAcKwh / annualConsumption * 100)
     : null;
+  const reasons = [];
+  if (!activePanelCount) reasons.push('No active panels in snapshot');
+  if (!ratedW) reasons.push('Missing snapshot pricing panel power');
+  if (!referenceDcKwh) reasons.push('Missing/incomplete snapshot panel DC production');
+  if (!inverterType) reasons.push('Unknown/ambiguous selected inverter type');
+  if (!inverterCount) reasons.push('Invalid/missing inverter count');
+  if (!inverterW) reasons.push('Missing inverter AC power');
+  if (!efficiency) reasons.push('Missing inverter efficiency');
+  if (!['2', '3'].includes(engine)) reasons.push('Unsupported snapshot production engine');
+  if (!noDiurnalCurves) reasons.push('Diurnal clipping curves require another calculation');
+  if (ratio !== null && factor === null) reasons.push('DC/AC ratio outside supported factor table');
+  if (!annualConsumption) reasons.push('Missing snapshot annual consumption');
+  if (projectPanelCount && activePanelCount !== projectPanelCount)
+    reasons.push('Stored snapshot count differs from panel array; using active array');
+  const catalogFallback = (!pricingInverterW && inverterW) || (!pricingEfficiency && efficiency);
+  if (catalogFallback) reasons.push('Inverter power/efficiency uses selected-model catalog fallback');
   return {
     rawPanelCount, projectPanelCount, panelRecordsMatch,
     activePanelCount, panelRatedPowerW: ratedW, systemSizeKw,
@@ -131,6 +152,10 @@ function calculateProjectEnergyMetrics_(source) {
     estimatedAnnualAcProductionKwh: estimatedAcKwh,
     annualEnergyConsumptionKwh: annualConsumption,
     estimatedOffsetPercent: estimatedOffset,
+    snapshotDate: source.snapshotDate ? new Date(source.snapshotDate) : '',
+    snapshotVersionId: source.snapshotVersionId,
+    snapshotEngineVersion: engine,
+    energyCalculationStatus: reasons.length ? reasons.join('; ') : 'Calculated from latest saved snapshot',
   };
 }
 
@@ -145,6 +170,8 @@ function projectEnergyMetricCells_(metrics) {
     values.estimatedAnnualAcProductionKwh,
     values.annualEnergyConsumptionKwh,
     values.estimatedOffsetPercent,
+    values.snapshotDate, values.snapshotVersionId, values.snapshotEngineVersion,
+    values.energyCalculationStatus,
   ].map((value) => value === null || value === undefined ? '' : value);
 }
 
@@ -223,14 +250,26 @@ function fetchProjectIdSummaryEnergyMetrics_(projectIds) {
               panelsWithDiurnalShape: get('panels_with_diurnal_shape'),
               annualEnergyUseAcKwh: get('annual_energy_use_ackwh'),
               productionEngineVersion: get('production_engine_version'),
+              snapshotDate: get('snapshot_date'),
+              snapshotVersionId: get('snapshot_version_id'),
+              panelsMissingProduction: get('panels_missing_production'),
             }));
           });
         } catch (error) {
           console.error(`[PROJECT ENERGY ERROR] ${source.label}: ${error}`);
+          // A failed GoodLeap lookup is not evidence that the project is absent.
+          batch.forEach((id) => {
+            if (!byProjectId.has(id)) byProjectId.set(id, {
+              energyCalculationStatus: `${source.label} snapshot query failed; retry refresh`,
+            });
+          });
         }
       });
     unresolved = unresolved.filter((id) => !byProjectId.has(id));
   });
+  unresolved.forEach((id) => byProjectId.set(id, {
+    energyCalculationStatus: 'Project not found in GoodLeap or Sales',
+  }));
   return byProjectId;
 }
 
@@ -239,80 +278,79 @@ function buildProjectIdSummaryEnergyQuery_(projectIds, projectsTable) {
   const pricingTable = projectIdSummaryRelatedTable_(
     projectsTable, 'pricingversions',
   );
-  const panelsTable = projectIdSummaryRelatedTable_(
-    projectsTable, 'solarpanels',
+  const versionsTable = projectIdSummaryRelatedTable_(
+    projectsTable, 'projectversions',
   );
   return [
+    'WITH ranked_versions AS (SELECT *,',
+    '  row_number() OVER (PARTITION BY project_id, organization_id',
+    '    ORDER BY created_at DESC, id DESC) AS version_rank',
+    `  FROM ${versionsTable} WHERE project_id IN (${literals})),`,
+    'latest_versions AS (SELECT *,',
+    "  arrayFilter(x -> JSONExtractBool(x, 'isActive'),",
+    "    JSONExtractArrayRaw(ifNull(toString(solar_panels), '[]'))) AS active_panels",
+    '  FROM ranked_versions WHERE version_rank = 1)',
     'SELECT p.id AS project_id,',
-    '  p.active_panels_count AS project_active_panel_count,',
-    '  pa.active_panel_count, pa.reference_dc_production_kwh,',
-    '  pa.panels_with_diurnal_shape,',
+    '  v.id AS snapshot_version_id, v.created_at AS snapshot_date,',
+    '  v.active_panels_count AS project_active_panel_count,',
+    '  length(v.active_panels) AS active_panel_count,',
+    "  arraySum(arrayMap(x -> JSONExtractFloat(x, 'panelAnnualProdDckwh'),",
+    '    v.active_panels)) AS reference_dc_production_kwh,',
+    "  arrayCount(x -> JSONExtractRaw(x, 'panelAnnualProdDckwh') IN ('', 'null'),",
+    '    v.active_panels) AS panels_missing_production,',
+    "  arrayCount(x -> JSONExtractRaw(x, 'diurnalDcShape') NOT IN ('', 'null', '[]'),",
+    '    v.active_panels) AS panels_with_diurnal_shape,',
     "  JSONExtractFloat(arrayFirst(x -> JSONExtractString(x, 'id') =",
-    '    p.solar_panel_type_id,',
+    '    v.solar_panel_type_id,',
     "    JSONExtractArrayRaw(coalesce(pv.value, '{}'), 'solar_panels')),",
     "    'capacity_watts') AS panel_rated_power_w,",
-    "  arrayFirst(x -> JSONExtractString(x, 'id') = p.inverter_type_id,",
+    "  arrayFirst(x -> JSONExtractString(x, 'id') = v.inverter_type_id,",
     "    JSONExtractArrayRaw(coalesce(pv.value, '{}'), 'inverters'))",
     '    AS selected_inverter_json,',
-    '  p.inverter_model_override, p.inverter_count_override,',
-    '  p.annual_energy_use_ackwh, p.production_engine_version',
+    '  v.inverter_model_override, v.inverter_count_override,',
+    '  v.annual_energy_use_ackwh, v.production_engine_version',
     `FROM ${projectsTable} AS p`,
-    `LEFT ANY JOIN ${pricingTable} AS pv ON pv.id = p.pricing_version_id`,
-    'LEFT ANY JOIN (SELECT project_id,',
-    '  countIf(is_active = true) AS active_panel_count,',
-    '  sumIf(panel_annual_prod_dckwh, is_active = true)',
-    '    AS reference_dc_production_kwh,',
-    "  countIf(is_active = true AND length(coalesce(diurnal_dc_shape, '')) > 0)",
-    '    AS panels_with_diurnal_shape',
-    `  FROM ${panelsTable} WHERE project_id IN (${literals})`,
-    '  GROUP BY project_id) AS pa ON pa.project_id = p.id',
+    'LEFT ANY JOIN latest_versions AS v ON v.project_id = p.id',
+    '  AND v.organization_id = p.organization_id',
+    `LEFT ANY JOIN ${pricingTable} AS pv ON pv.id = v.pricing_version_id`,
     `WHERE p.id IN (${literals})`,
     `LIMIT ${Math.max(projectIds.length * 2, projectIds.length)}`,
   ].join('\n');
 }
 
+/** Read-only end-to-end validation of the two inspected latest snapshots. */
+function validateArtemisSnapshotEnergyExamples() {
+  const examples = [
+    {id: '1a178bd7-8640-4702-b7b5-c0e929404c06',
+      version: '80c4c67b-d2cf-4809-ada2-42df895ec044', count: 20,
+      dc: 11473.880950039056, ac: 11995.002859830853, size: 8.6, offset: 142},
+    {id: 'f8c08b92-ce68-453b-9353-210e41c2d149',
+      version: 'aa604b23-fc06-49c0-a7b7-4ad7323344cf', count: 9,
+      dc: 3842.675949950245, ac: 4022.389215636849, size: 3.87, offset: 68},
+  ];
+  const lookup = fetchProjectIdSummaryEnergyMetrics_(examples.map((item) => item.id));
+  const results = examples.map((item) => {
+    const metrics = lookup.get(item.id);
+    const passed = Boolean(metrics && metrics.snapshotVersionId === item.version &&
+      metrics.activePanelCount === item.count &&
+      Math.abs(metrics.referenceDcProductionKwh - item.dc) < 0.001 &&
+      Math.abs(metrics.estimatedAnnualAcProductionKwh - item.ac) < 0.001 &&
+      Math.abs(metrics.systemSizeKw - item.size) < 0.000001 &&
+      metrics.estimatedOffsetPercent === item.offset);
+    return {projectId: item.id, metrics, passed};
+  });
+  console.log(JSON.stringify(results, null, 2));
+  if (!results.every((item) => item.passed)) throw new Error(
+    'Snapshot example validation failed or a newer snapshot is available.');
+  return results;
+}
+
 /** Read-only PostHog check before publishing the migrated summary. */
 function validateArtemisEnergyProjectExample() {
-  const projectId = 'd4261513-53c6-4740-ab32-c9f808b0e491';
-  const metrics = fetchProjectIdSummaryEnergyMetrics_([projectId]).get(projectId);
-  if (!metrics) throw new Error(`PostHog did not return ${projectId}.`);
-  const checks = {
-    inverterType: metrics.inverterType === 'micro',
-    inverterCount: metrics.inverterCount === 22,
-    annualConsumption: metrics.annualEnergyConsumptionKwh === 13447,
-    systemSizeKw: Math.abs(metrics.systemSizeKw - 9.46) < 0.000001,
-    productionKwh:
-      Math.abs(metrics.estimatedAnnualAcProductionKwh - 13298.572102) < 0.001,
-    offsetPercent: metrics.estimatedOffsetPercent === 98,
-  };
-  const result = {projectId, metrics, checks, passed: Object.values(checks)
-    .every(Boolean)};
-  console.log(JSON.stringify(result, null, 2));
-  if (!result.passed) throw new Error('Example project energy validation failed.');
-  return result;
+  return validateArtemisSnapshotEnergyExamples();
 }
 
 /** Read-only regression validation for both reported count discrepancies. */
 function validateArtemisPanelCountRules() {
-  const examples = [
-    {id: '05d70604-d371-4c91-b5c0-a2d075cec526', count: 10, size: 4.35},
-    {id: 'd4f658cb-dcaf-4efd-bd08-9a84c1ed0dd6', count: 22, size: 9.46},
-  ];
-  const metrics = fetchProjectIdSummaryEnergyMetrics_(examples.map((item) => item.id));
-  const results = examples.map((item) => {
-    const value = metrics.get(item.id);
-    const passed = Boolean(value && value.inverterType === 'micro' &&
-      value.activePanelCount === item.count && value.inverterCount === item.count &&
-      Math.abs(value.systemSizeKw - item.size) < 0.000001 &&
-      value.inverterNominalAcPowerW === 380 &&
-      value.inverterMaxEfficiencyPercent === 97.3 &&
-      value.panelRecordsMatch === false && value.referenceDcProductionKwh === null &&
-      value.estimatedAnnualAcProductionKwh === null && value.estimatedOffsetPercent === null);
-    return {projectId: item.id, metrics: value, passed};
-  });
-  console.log(JSON.stringify(results, null, 2));
-  if (!results.every((item) => item.passed)) {
-    throw new Error('Provisional panel-count validation failed.');
-  }
-  return results;
+  return validateArtemisSnapshotEnergyExamples();
 }

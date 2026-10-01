@@ -227,6 +227,10 @@ const PROJECT_ID_SUMMARY_ENERGY_HEADERS = [
   'estimated_annual_ac_production_kwh',
   'Annual Energy Consumption kWh',
   'estimated_offset_percent',
+  'Snapshot Date',
+  'Snapshot Version ID',
+  'Snapshot Engine Version',
+  'Energy Calculation Status',
 ];
 
 const LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_V9 =
@@ -282,6 +286,11 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
     PROJECT_ID_SUMMARY_DELTA_HEADERS,
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
+
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17 = PROJECT_ID_SUMMARY_HEADERS.filter(
+  (header) => !['Snapshot Date', 'Snapshot Version ID', 'Snapshot Engine Version',
+    'Energy Calculation Status'].includes(header),
+);
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
@@ -784,8 +793,12 @@ function buildProjectIdSummary_(spreadsheet, options) {
       projectMetadataLookup.byProjectId.get(project.key);
     const projectMetadata = refreshedProjectMetadata ||
       existingProjectMetadata.get(project.key) || {};
-    const energyMetrics = energyMetricsLookup.get(project.key) ||
-      (existingProjectMetadata.get(project.key) || {}).energyMetrics || {};
+    const refreshedEnergyMetrics = energyMetricsLookup.get(project.key);
+    const cachedEnergyMetrics = (existingProjectMetadata.get(project.key) || {}).energyMetrics;
+    const energyMetrics = refreshedEnergyMetrics ||
+      (cachedEnergyMetrics && (cachedEnergyMetrics.snapshotVersionId ||
+        cachedEnergyMetrics.energyCalculationStatus) ? cachedEnergyMetrics :
+        {energyCalculationStatus: 'Snapshot lookup pending; run refreshProjectIdSummary'});
     const benchArtPercent =
       calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
         email.latestBenchmarkProductionKwh,
@@ -1482,6 +1495,8 @@ function loadExistingProjectIdSummaryProjectMetadata_(sheet) {
             'dcAcRatio', 'dcAcCorrectionFactor',
             'estimatedAnnualAcProductionKwh', 'annualEnergyConsumptionKwh',
             'estimatedOffsetPercent',
+            'snapshotDate', 'snapshotVersionId', 'snapshotEngineVersion',
+            'energyCalculationStatus',
           ][index],
           row[headers.indexOf(header)],
         ]),
@@ -2276,7 +2291,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     !projectIdSummaryHeadersMatch_(
       currentHeaders,
       LEGACY_PROJECT_ID_SUMMARY_HEADERS_V16,
-    );
+    ) && !projectIdSummaryHeadersMatch_(currentHeaders, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17);
   if (hasUnexpectedContent) {
     throw new Error(
       'Project ID Summary already exists with an unexpected schema. ' +
@@ -2517,6 +2532,11 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     );
   }
 
+  if (projectIdSummaryHeadersMatch_(currentHeaders, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17)) {
+    migrateProjectIdSummarySchema_(sheet, LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17);
+    console.log('Project ID Summary upgraded: snapshot provenance added safely.');
+  }
+
   sheet
     .getRange(1, 1, 1, PROJECT_ID_SUMMARY_HEADERS.length)
     .setValues([PROJECT_ID_SUMMARY_HEADERS])
@@ -2565,6 +2585,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
     sheet.setColumnWidth(projectIdSummaryColumn_(header), 155);
   });
+  sheet.setColumnWidth(projectIdSummaryColumn_('Snapshot Date'), 180);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Snapshot Version ID'), 280);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Energy Calculation Status'), 420);
   sheet.setColumnWidths(projectIdSummaryColumn_('Solar Panel'), 2, 220);
   sheet.setColumnWidths(projectIdSummaryColumn_('Installer'), 2, 180);
   sheet.setColumnWidths(projectIdSummaryColumn_('Email Count'), 3, 135);
@@ -2738,7 +2761,9 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   });
   PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
     sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
-      .setNumberFormat(header === 'Inverter Type' ? '@' : header.endsWith('_count') ||
+      .setNumberFormat(header === 'Snapshot Date' ? PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT :
+        ['Inverter Type', 'Snapshot Version ID', 'Snapshot Engine Version',
+          'Energy Calculation Status'].includes(header) ? '@' : header.endsWith('_count') ||
         header === 'estimated_offset_percent' ? '#,##0' : '#,##0.000000');
   });
   sheet

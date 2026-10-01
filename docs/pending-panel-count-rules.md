@@ -1,7 +1,36 @@
 # Pending panel-count rules and source diagnosis
 
-Recorded 2026-09-30 at the user's request. The interim rule is implemented in
-EnergyProductionMetrics.gs; the individual-panel selection remains unresolved.
+## Snapshot implementation, 2026-09-30
+
+The historical provisional rules below are superseded for energy metrics by
+the latest saved ProjectVersion. Active count and DC production now come from
+the same version's active panel array. Snapshot-specific Pricing, inverter
+override, engine and annual consumption drive the subsequent calculations.
+The micro count defaults to that array count, while the approved string count
+remains one. Version/date/engine and calculation status are published alongside
+the metrics. Raw SolarPanels are not used as an energy fallback.
+
+The Sales 20-panel and GoodLeap nine-panel generated queries were validated
+through PostHog MCP. Their DC sums are 11473.880950039056 and
+3842.675949950245 kWh. The nine-panel snapshot estimate differs from the
+current live screen; its missing historical efficiency uses the selected-model
+catalog fallback and the status exposes that fact.
+
+Installed and executed in the existing Apps Script project on 2026-09-30.
+The completed summary refresh published reference DC for all 117 projects and
+estimated AC for 97. The remaining 20 have explicit calculation statuses:
+17 lack sufficient selected-inverter metadata (one also has an unsupported
+engine), and three have a DC/AC ratio outside the supported factor table.
+Category Explorer was rebuilt successfully and retained its Equipment selector
+with seven results. Both snapshot example validations passed in Apps Script.
+
+The published Sales example is 20 panels, 8.6 kW, 11995.002860 kWh AC and
+142 percent offset. The nine-panel example is 3.87 kW, 4022.389216 kWh AC and
+68 percent from the 2026-09-21 saved snapshot, not the current live UI's
+3970 kWh and 67 percent. No commit or push was performed for this update.
+
+The following sections preserve the earlier provisional investigation. Their
+raw-panel selection limitations do not describe the new snapshot calculation.
 
 ## Requested interim rule
 

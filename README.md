@@ -347,20 +347,31 @@ It:
   inverter type (`count_strategy`), AC watts/count/efficiency, annual energy
   consumption (`annual_energy_use_ackwh`), active-panel reference DC production,
   DC/AC ratio and correction factor, estimated AC production, and estimated
-  offset. The existing `Engine Version` column already supplies
-  `production_engine_version`. Never sum source `panel_capacity_watts` as
+  offset. Energy metrics use the latest saved `ProjectVersions` record for the
+  project's organization, ordered by `created_at DESC, id DESC`. GoodLeap is
+  checked first; Sales is queried only for projects absent from GoodLeap.
+  `Snapshot Date`, `Snapshot Version ID`, `Snapshot Engine Version`, and
+  `Energy Calculation Status` identify the source and any missing inputs.
+  These are saved-version estimates, not guaranteed current live-design values.
+  Never sum source `panel_capacity_watts` as
   nominal power. Estimates remain blank when the physical inverter count,
   inverter model, V2/V3 no-curve formula, correction-table range, or adjusted
   consumption cannot be established safely.
-  Microinverters use a positive `inverter_count_override`, otherwise
-  `projects.active_panels_count`; the published panel count equals that count.
-  String/other known strategies use one inverter and the active panel-row count.
+  Active panel count and reference DC are extracted from the same snapshot's
+  `solar_panels` array, selecting `isActive = true` and summing
+  `panelAnnualProdDckwh`. Snapshot pricing, selected models, overrides, engine,
+  and annual consumption are used together. Microinverters use the snapshot's
+  count override when present, otherwise its active panel count. String/other
+  known strategies retain the user-approved one-inverter rule. An override
+  never changes the panel records selected for the DC sum.
   Pricing models without an ID are resolved by a normalized catalogue model
   number. A unique match supplies missing power/efficiency. Duplicate matches
   supply only the inverter type when every record has the same nonempty
   `count_strategy`; conflicting or missing strategies remain unresolved.
-  DC production, AC production, and offset stay blank when panel-row counts
-  disagree with the effective or known project count. Offset uses the
+  Missing snapshots, incomplete panel production, or unsupported engine/curve
+  calculations leave affected estimates blank with a visible reason. Missing
+  inverter numeric specifications may use a unique selected-model catalog match;
+  that fallback is explicitly recorded in the calculation status. Offset uses the
   confirmed efficiency-adjusted annual consumption and truncates to an integer.
 - Applies wrapped text to every cell in `Project ID Summary` on setup and every
   refresh, including the header and all currently allocated blank cells.
@@ -376,18 +387,20 @@ Primary functions:
 3. `previewProjectIdSummary()`
 4. `setupProjectIdSummary()`
 5. `refreshProjectIdSummary()`
-6. `validateArtemisEnergyProjectExample()` (read-only source validation before
+6. `validateArtemisSnapshotEnergyExamples()` (read-only source validation before
    publishing the migrated sheet)
 
 For this energy-metric upgrade, install both `ProjectIdSummary.gs` and the new
 `EnergyProductionMetrics.gs` in the same Apps Script project. Run
-`validateArtemisEnergyProjectExample()` first, then `setupProjectIdSummary()`
+`validateArtemisSnapshotEnergyExamples()` first, then `refreshProjectIdSummary()`
 and `setupCategoryExplorer()` to migrate the summary and update the explorer's
 header-based references. No trigger reinstallation is required. Unsupported
 engine/curve combinations or missing catalog inputs leave estimates blank.
-For the interim panel-count update, replace `EnergyProductionMetrics.gs`, run
-`validateArtemisEnergyProjectExample()` and `validateArtemisPanelCountRules()`,
-then `refreshProjectIdSummary()`. This update does not add or move columns.
+The older validation function names delegate to the snapshot examples. The
+20-panel Sales snapshot reproduces 8.6 kW, 11,995.003 kWh AC and 142%.
+The nine-panel GoodLeap snapshot gives 3.87 kW, 4,022.389 kWh AC and 68%;
+it predates the live screen showing 3,970 kWh and 67% and must not be presented
+as a live match. No fallback to raw replicated SolarPanels is performed.
 
 ### `OpenAIPdfExtraction.gs`
 
