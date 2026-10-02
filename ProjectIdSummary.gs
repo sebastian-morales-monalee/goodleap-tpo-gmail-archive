@@ -404,7 +404,11 @@ const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER =
 const PROJECT_ID_SUMMARY_STATUS_HEADER = 'Status';
 const PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER = 'Status Order';
 
-const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+// Re-enable explicitly to restore the optional comparison-delta outputs.
+const PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = false;
+const PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS =
+  PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS ? PROJECT_ID_SUMMARY_DELTA_HEADERS : [];
+const PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
   [
@@ -416,6 +420,11 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   ],
   PROJECT_ID_SUMMARY_DELTA_HEADERS,
   PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
+);
+
+const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
+  header => PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS ||
+    !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
 );
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
@@ -432,7 +441,7 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 
-const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18 = PROJECT_ID_SUMMARY_HEADERS.filter(
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18 = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
   header => !PROJECT_ID_SUMMARY_CONDITIONAL_HEADERS.includes(header),
 );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17 = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18.filter(
@@ -592,7 +601,7 @@ const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
   PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1;
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
   PROJECT_ID_SUMMARY_DELTA_START_INDEX +
-  PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
+  PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.length;
 const PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX =
   PROJECT_ID_SUMMARY_HEADERS.indexOf('Email Count');
 const PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX =
@@ -738,7 +747,7 @@ function previewProjectIdSummary() {
       row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX],
     status: row[PROJECT_ID_SUMMARY_STATUS_INDEX] || '',
     statusOrder: row[PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX] || '',
-    shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
+    shadeReportDeltas: PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.reduce(
       (result, header, offset) => {
         result[header] = row[PROJECT_ID_SUMMARY_DELTA_START_INDEX + offset];
         return result;
@@ -857,7 +866,8 @@ function buildProjectIdSummary_(spreadsheet, options) {
     PROJECT_ID_SUMMARY_CONFIG.PDF_SHEET_NAME,
   );
   const attachmentCounts = loadProjectIdSummaryAttachmentCounts_(spreadsheet);
-  const comparisonDeltas = loadProjectIdSummaryComparisonDeltas_(spreadsheet);
+  const comparisonDeltas = PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
+    ? loadProjectIdSummaryComparisonDeltas_(spreadsheet) : new Map();
   const existingMapData = options && options.existingMapData
     ? options.existingMapData
     : new Map();
@@ -939,9 +949,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
 
     const refreshedMapData = mapLookup.byProjectId.get(project.key);
     const mapData = refreshedMapData || existingMapData.get(project.key) || {};
-    const deltaValues = comparisonDeltas.get(project.key) ||
-      Array(PROJECT_ID_SUMMARY_DELTA_HEADERS.length).fill('');
-    if (!comparisonDeltas.has(project.key)) {
+    const deltaValues = PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
+      ? comparisonDeltas.get(project.key) || Array(PROJECT_ID_SUMMARY_DELTA_HEADERS.length).fill('')
+      : [];
+    if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS && !comparisonDeltas.has(project.key)) {
       projectsWithoutComparisonDeltas += 1;
     }
     const refreshedProjectMetadata =
@@ -1057,8 +1068,9 @@ function buildProjectIdSummaryStats_(summary) {
     projectsWithoutEmails: summary.projectsWithoutEmails,
     projectsWithoutPdfs: summary.projectsWithoutPdfs,
     projectsWithoutAttachments: summary.projectsWithoutAttachments,
-    projectsWithComparisonDeltas:
-      summary.rows.length - summary.projectsWithoutComparisonDeltas,
+    comparisonDeltasEnabled: PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS,
+    projectsWithComparisonDeltas: PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
+      ? summary.rows.length - summary.projectsWithoutComparisonDeltas : 0,
     projectsWithoutComparisonDeltas: summary.projectsWithoutComparisonDeltas,
     projectsWithAddress: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Address')],
@@ -2094,6 +2106,7 @@ function loadProjectIdSummaryAttachmentCounts_(spreadsheet) {
  * Values remain blank when the comparison row or individual metric is missing.
  */
 function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
+  if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) return new Map();
   const byProjectId = new Map();
   const sheet = spreadsheet.getSheetByName(
     PROJECT_ID_SUMMARY_CONFIG.COMPARISON_SHEET_NAME,
@@ -2356,6 +2369,15 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   if (!sheet) {
     sheet = spreadsheet.insertSheet(PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME);
   }
+  if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS && sheet.getLastRow() > 0) {
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    // Remove only recognized optional columns, right-to-left, preserving all other data.
+    for (let index = headers.length - 1; index >= 0; index -= 1) {
+      if (PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(String(headers[index]).trim())) {
+        sheet.deleteColumn(index + 1);
+      }
+    }
+  }
   if (sheet.getMaxColumns() < PROJECT_ID_SUMMARY_HEADERS.length) {
     sheet.insertColumnsAfter(
       sheet.getMaxColumns(),
@@ -2363,12 +2385,21 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     );
   }
 
-  const currentHeaders = sheet.getLastRow() > 0
+  let currentHeaders = sheet.getLastRow() > 0
     ? sheet
         .getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1))
         .getDisplayValues()[0]
         .map((value) => String(value).trim())
     : [];
+  const compactHeaders = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
+    header => !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
+  );
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS &&
+      projectIdSummaryHeadersMatch_(currentHeaders, compactHeaders)) {
+    migrateProjectIdSummarySchema_(sheet, compactHeaders);
+    currentHeaders = PROJECT_ID_SUMMARY_HEADERS;
+    console.log('Project ID Summary: optional comparison deltas re-enabled.');
+  }
   const hasUnexpectedContent = currentHeaders.some(Boolean) &&
     !projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS) &&
     !projectIdSummaryHeadersMatch_(
@@ -2702,6 +2733,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   const statusColumn = PROJECT_ID_SUMMARY_STATUS_INDEX + 1;
   const statusOrderColumn = PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1;
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
   sheet
     .getRange(
       1,
@@ -2711,6 +2743,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_HEADER_BACKGROUND);
   styleProjectIdSummaryAbsoluteDeltaColumns_(sheet, 1, 1, true);
+  }
   const metadataStartColumn = PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1;
   sheet
     .getRange(
@@ -2762,6 +2795,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(toleranceRangeColumn, 190);
   sheet.setColumnWidth(statusColumn, 150);
   sheet.setColumnWidth(statusOrderColumn, 125);
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
   sheet.setColumnWidths(
     deltaStartColumn,
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
@@ -2774,6 +2808,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       header === 'Absolute Azimuth + Pitch' ? 190 : 165,
     );
   });
+  }
   sheet.setColumnWidth(metadataStartColumn, 135);
   sheet.setColumnWidths(metadataStartColumn + 1, 4, 180);
   const existingDataRows = Math.max(0, sheet.getLastRow() - 1);
@@ -2800,6 +2835,7 @@ function migrateProjectIdSummarySchema_(sheet, sourceHeaders) {
       const sourceIndex = sourceIndexByHeader.get(header);
       return sourceIndex === undefined ? '' : sourceRow[sourceIndex];
     });
+    if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
     const deltaAzimuth = migratedRow[
       PROJECT_ID_SUMMARY_HEADERS.indexOf('Delta Azimuth')
     ];
@@ -2823,6 +2859,7 @@ function migrateProjectIdSummarySchema_(sheet, sourceHeaders) {
     ] = hasDeltaAzimuth && hasDeltaPitch
       ? absoluteDeltaAzimuth + absoluteDeltaPitch
       : '';
+    }
     migratedRow[
       PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')
     ] = calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
@@ -2862,6 +2899,7 @@ function styleProjectIdSummaryAbsoluteDeltaColumns_(
   rowCount,
   isHeader,
 ) {
+  if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) return;
   const background = isHeader
     ? PROJECT_ID_SUMMARY_CONFIG.ABSOLUTE_DELTA_HEADER_BACKGROUND
     : PROJECT_ID_SUMMARY_CONFIG.ABSOLUTE_DELTA_DATA_BACKGROUND;
@@ -3042,6 +3080,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     .setHorizontalAlignment('center');
 
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
   sheet
     .getRange(
       startRow,
@@ -3058,6 +3097,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     rowCount,
     false,
   );
+  }
 
   const metadataStartColumn = PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1;
   sheet

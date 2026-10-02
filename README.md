@@ -18,6 +18,14 @@ No web-app deployment is required.
 
 ## GoodLeap conditional columns
 
+Comparison delta outputs (formerly BA–BU) are disabled in Project ID Summary.
+Refresh removes those columns and does not load their comparison values.
+Engine Version now follows Status Order at BA, with dates at BB–BE.
+To restore these optional outputs, set
+`PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = true` in ProjectIdSummary.gs,
+save it in Apps Script and refresh the summary. Existing comparison source
+tabs and the original delta definitions remain available for traceability.
+
 Every Project ID Summary refresh orders complete rows by `Created At`, newest
 first. Missing or invalid dates appear last, with Project ID as the deterministic
 tie-breaker. Manual sorting is replaced on the next summary refresh.
