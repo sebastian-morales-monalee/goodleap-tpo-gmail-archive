@@ -1013,20 +1013,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
     ));
   });
 
-  rows.sort((left, right) => {
-    const emailDifference =
-      Number(right[PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX]) -
-      Number(left[PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX]);
-    if (emailDifference !== 0) return emailDifference;
-    const rightTime = projectIdSummaryDateTime_(
-      right[PROJECT_ID_SUMMARY_LAST_EMAIL_INDEX],
-    );
-    const leftTime = projectIdSummaryDateTime_(
-      left[PROJECT_ID_SUMMARY_LAST_EMAIL_INDEX],
-    );
-    if (rightTime !== leftTime) return rightTime - leftTime;
-    return String(left[0]).localeCompare(String(right[0]));
-  });
+  sortProjectIdSummaryByCreatedAt_(rows);
 
   return {
     rows,
@@ -3208,6 +3195,22 @@ function normalizeProjectIdSummaryComparable_(value) {
     return `date:${value.getTime()}`;
   }
   return `${typeof value}:${String(value == null ? '' : value)}`;
+}
+
+/** Latest creation first; missing dates last; stable Project ID tie-breaker. */
+function sortProjectIdSummaryByCreatedAt_(rows) {
+  const index = PROJECT_ID_SUMMARY_HEADERS.indexOf('Created At');
+  rows.sort((left, right) => {
+    const leftDate = normalizeProjectIdSummaryDate_(left[index]);
+    const rightDate = normalizeProjectIdSummaryDate_(right[index]);
+    if (Boolean(leftDate) !== Boolean(rightDate)) return leftDate ? -1 : 1;
+    if (leftDate && rightDate) {
+      const difference = rightDate.getTime() - leftDate.getTime();
+      if (difference !== 0) return difference;
+    }
+    return String(left[0]).localeCompare(String(right[0]));
+  });
+  return rows;
 }
 
 function normalizeProjectIdSummaryDate_(value) {

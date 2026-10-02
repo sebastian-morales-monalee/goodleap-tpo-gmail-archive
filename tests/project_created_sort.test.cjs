@@ -1,0 +1,20 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+const source = fs.readFileSync(path.join(__dirname, '..', 'ProjectIdSummary.gs'), 'utf8');
+const context = vm.createContext({console, Date});
+vm.runInContext(source, context);
+test('Created At sorts full rows descending, with missing dates last and stable ties', () => {
+  const index = vm.runInContext("PROJECT_ID_SUMMARY_HEADERS.indexOf('Created At')", context);
+  const row = (id, date) => { const values = []; values[0] = id; values[1] = `data-${id}`; values[index] = date; return values; };
+  const rows = [row('z', ''), row('old', new Date('2026-08-01')), row('b', '2026-10-02T12:00:00Z'), row('bad', 'invalid'), row('a', new Date('2026-10-02T12:00:00Z'))];
+  const originals = new Map(rows.map(r => [r[0], r]));
+  context.sortProjectIdSummaryByCreatedAt_(rows);
+  assert.deepEqual(rows.map(r => r[0]), ['a', 'b', 'old', 'bad', 'z']);
+  rows.forEach(r => assert.equal(r, originals.get(r[0])));
+  context.sortProjectIdSummaryByCreatedAt_(rows);
+  assert.deepEqual(rows.map(r => r[0]), ['a', 'b', 'old', 'bad', 'z']);
+  assert.match(source, /sortProjectIdSummaryByCreatedAt_\(rows\);/);
+});

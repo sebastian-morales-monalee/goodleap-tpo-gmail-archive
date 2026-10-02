@@ -18,6 +18,10 @@ No web-app deployment is required.
 
 ## GoodLeap conditional columns
 
+Every Project ID Summary refresh orders complete rows by `Created At`, newest
+first. Missing or invalid dates appear last, with Project ID as the deterministic
+tie-breaker. Manual sorting is replaced on the next summary refresh.
+
 Y/Z/AA use live conditional formatting: boolean TRUE has the same light green
 as AX (`#b7e1cd`), FALSE has light red (`#f4cccc`), and blanks stay white.
 `setupProjectIdSummaryBooleanColors()` installs only these styles, without
