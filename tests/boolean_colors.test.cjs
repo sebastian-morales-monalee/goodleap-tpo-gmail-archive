@@ -11,11 +11,11 @@ test('boolean colors are live, blank-safe, idempotent and preserve unrelated rul
   const unrelated = {getBooleanCondition: () => null};
   let rules = [unrelated];
   const styles = [];
-  const range = {getA1Notation: () => 'Y2:AA1000', getRow: () => 2,
-    getColumn: () => 25, getNumColumns: () => 3,
+  const range = {getA1Notation: () => 'Z2:AB1000', getRow: () => 2,
+    getColumn: () => 26, getNumColumns: () => 3,
     setBackground(v) {styles.push(v); return this;}, setFontColor(v) {return this;}};
   const sheet = {getMaxRows: () => 1000, getRange(row,col,count,width) {
-    assert.deepEqual([row,col,count,width], [2,25,999,3]); return range;
+    assert.deepEqual([row,col,count,width], [2,26,999,3]); return range;
   }, getConditionalFormatRules: () => rules, setConditionalFormatRules(v) {rules = v;}};
   context.SpreadsheetApp = {BooleanCriteria: {CUSTOM_FORMULA: 'CUSTOM_FORMULA'},
     newConditionalFormatRule() {
@@ -32,8 +32,8 @@ test('boolean colors are live, blank-safe, idempotent and preserve unrelated rul
   context.applyProjectIdSummaryBooleanColors_(sheet);
   assert.equal(rules.length, 3);
   assert.equal(rules[0], unrelated);
-  assert.equal(rules[1].formula, '=AND(ISLOGICAL(Y2),Y2=TRUE)');
-  assert.equal(rules[2].formula, '=AND(ISLOGICAL(Y2),Y2=FALSE)');
+  assert.equal(rules[1].formula, '=AND(ISLOGICAL(Z2),Z2=TRUE)');
+  assert.equal(rules[2].formula, '=AND(ISLOGICAL(Z2),Z2=FALSE)');
   assert.equal(rules[1].color, '#b7e1cd');
   assert.equal(rules[2].color, '#f4cccc');
   assert.ok(styles.every(v => v === '#ffffff'));

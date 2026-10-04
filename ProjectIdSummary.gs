@@ -426,6 +426,9 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter
   header => PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS ||
     !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
 );
+// Keep the message identifier used by Category Explorer; expose the latest case link separately.
+PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID') + 1, 0, 'Gmail URL');
+PROJECT_ID_SUMMARY_HEADERS.splice(3, 0, 'Aurora Shade Report URL');
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
@@ -582,10 +585,10 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.length;
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID');
 const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
   PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX +
-  PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length;
+  PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length + 1;
 const PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX =
   PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX +
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length;
@@ -705,6 +708,7 @@ function previewProjectIdSummary() {
     projectId: row[0],
     applicationId: row[PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX] || '',
     projectUrl: row[PROJECT_ID_SUMMARY_PROJECT_URL_INDEX] || '',
+    auroraShadeReportUrl: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Aurora Shade Report URL')] || '',
     address: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Address')] || '',
     state: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('State')] || '',
     region: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Region')] || '',
@@ -724,12 +728,13 @@ function previewProjectIdSummary() {
     rgbBasemapUrl: row[PROJECT_ID_SUMMARY_RGB_BASEMAP_URL_INDEX] || '',
     gmailMessageId:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX] || '',
+    gmailUrl: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL')] || '',
     requiredEvidence:
-      row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1] || '',
-    technicalNotes:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 2] || '',
-    aiSummary:
+    technicalNotes:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 3] || '',
+    aiSummary:
+      row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 4] || '',
     latestAiEmailReceivedAt:
       row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX] || '',
     proposedProductionKwh:
@@ -858,6 +863,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
   const projects = loadProjectIdSummaryBaseProjects_(spreadsheet);
   const pdfApplicationIds =
     loadProjectIdSummaryPdfApplicationIds_(spreadsheet);
+  const latestShadeReports = loadProjectIdSummaryLatestShadeReports_(spreadsheet);
   const emailMetrics = loadProjectIdSummaryEmailMetrics_(spreadsheet);
   const latestArchivedEmails =
     loadProjectIdSummaryLatestArchivedEmails_(spreadsheet);
@@ -975,6 +981,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       project.projectId,
       formatProjectIdSummaryApplicationIds_(applicationIds),
       project.projectUrl,
+      (latestShadeReports.get(project.key) || {}).url || '',
       projectMetadata.address || '',
       projectMetadata.state || '',
       getProjectIdSummaryRegion_(projectMetadata.state, stateRegionLookup),
@@ -992,6 +999,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       mapData.mapDataSource || '',
       mapData.rgbBasemapUrl || '',
       email.latestGmailMessageId,
+      getProjectIdSummaryLatestGmailUrl_(applicationIds, latestArchivedEmails),
       email.latestRequiredEvidence,
       email.latestTechnicalNotes,
       email.latestAiSummary,
@@ -1053,6 +1061,9 @@ function buildProjectIdSummary_(spreadsheet, options) {
 function buildProjectIdSummaryStats_(summary) {
   return {
     uniqueProjects: summary.rows.length,
+    projectsWithAuroraShadeReportUrl: summary.rows.filter(
+      row => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Aurora Shade Report URL')],
+    ).length,
     projectsWithApplicationIds: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX],
     ).length,
@@ -1119,13 +1130,13 @@ function buildProjectIdSummaryStats_(summary) {
       (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX],
     ).length,
     projectsWithLatestRequiredEvidence: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Required Evidence')],
     ).length,
     projectsWithLatestTechnicalNotes: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 2],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Technical Notes')],
     ).length,
     projectsWithLatestAiSummary: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 3],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('AI Summary')],
     ).length,
     projectsWithLatestAiAnalysis: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX],
@@ -1736,6 +1747,30 @@ function loadProjectIdSummaryBaseProjects_(spreadsheet) {
   return Array.from(projectsById.values());
 }
 
+/** Choose by source receipt time, never by analysis time or URL availability. */
+function loadProjectIdSummaryLatestShadeReports_(spreadsheet) {
+  const latest = new Map();
+  const sheet = spreadsheet.getSheetByName(PROJECT_ID_SUMMARY_CONFIG.PDF_SHEET_NAME);
+  if (!sheet || sheet.getLastRow() < 2) return latest;
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
+  const headers = values[0].map(value => String(value).trim());
+  const projectColumn = requireProjectIdSummaryHeader_(headers, 'Project ID', sheet.getName());
+  const receivedColumn = requireProjectIdSummaryHeader_(headers, 'Source Received At', sheet.getName());
+  const urlColumn = requireProjectIdSummaryHeader_(headers, 'Source PDF URL', sheet.getName());
+  values.slice(1).forEach((row, sequence) => {
+    const receivedAt = normalizeProjectIdSummaryDate_(row[receivedColumn]);
+    const timestamp = receivedAt ? receivedAt.getTime() : -Infinity;
+    splitProjectIdSummaryIds_(row[projectColumn]).forEach(key => {
+      const previous = latest.get(key);
+      if (!previous || timestamp > previous.timestamp ||
+          (timestamp === previous.timestamp && sequence > previous.sequence)) {
+        latest.set(key, {timestamp, sequence, url: safeProjectIdSummaryUrl_(row[urlColumn])});
+      }
+    });
+  });
+  return latest;
+}
+
 function loadProjectIdSummaryPdfApplicationIds_(spreadsheet) {
   const byProjectId = new Map();
   const sheet = spreadsheet.getSheetByName(
@@ -1946,18 +1981,33 @@ function loadProjectIdSummaryLatestArchivedEmails_(spreadsheet) {
   const messageIndex = requireProjectIdSummaryHeader_(
     headers, 'Gmail Message ID', sheet.getName(),
   );
+  const groupUrlIndex = requireProjectIdSummaryHeader_(headers, 'Google Group URL', sheet.getName());
   values.slice(1).forEach((row, sequence) => {
     const applicationId = String(row[applicationIndex] || '').trim();
     const messageId = String(row[messageIndex] || '').trim();
-    if (!applicationId || !messageId) return;
+    if (!applicationId) return;
     const receivedAt = normalizeProjectIdSummaryDate_(row[receivedIndex]);
     const timestamp = projectIdSummaryDateTime_(receivedAt);
     const previous = latest.get(applicationId);
     if (!previous || timestamp >= previous.timestamp) {
-      latest.set(applicationId, {messageId, timestamp, sequence});
+      latest.set(applicationId, {messageId, timestamp, sequence,
+        gmailUrl: safeProjectIdSummaryUrl_(row[groupUrlIndex])});
     }
   });
   return latest;
+}
+
+function getProjectIdSummaryLatestGmailUrl_(applicationIds, latest) {
+  let selected = null;
+  applicationIds.forEach((applicationId) => {
+    const candidate = latest.get(String(applicationId).trim());
+    if (candidate && (!selected || candidate.timestamp > selected.timestamp ||
+        (candidate.timestamp === selected.timestamp && candidate.sequence > selected.sequence))) {
+      selected = candidate;
+    }
+  });
+  // Do not substitute an older link when the newest email has no URL.
+  return selected ? selected.gmailUrl || '' : '';
 }
 
 function getProjectIdSummaryLatestCategories_(email, applicationIds, latest) {
@@ -2394,6 +2444,22 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   const compactHeaders = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
     header => !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
   );
+  compactHeaders.splice(compactHeaders.indexOf('Gmail Message ID') + 1, 0, 'Gmail URL');
+  compactHeaders.splice(3, 0, 'Aurora Shade Report URL');
+  const beforeAurora = PROJECT_ID_SUMMARY_HEADERS.filter(header => header !== 'Aurora Shade Report URL');
+  const beforeBothLinks = beforeAurora.filter(header => header !== 'Gmail URL');
+  if (projectIdSummaryHeadersMatch_(currentHeaders, beforeAurora) ||
+      projectIdSummaryHeadersMatch_(currentHeaders, beforeBothLinks)) {
+    sheet.insertColumnAfter(currentHeaders.indexOf('Project URL') + 1);
+    sheet.getRange(1, 4).setValue('Aurora Shade Report URL');
+    currentHeaders.splice(3, 0, 'Aurora Shade Report URL');
+  }
+  const previousHeaders = PROJECT_ID_SUMMARY_HEADERS.filter(header => header !== 'Gmail URL');
+  if (projectIdSummaryHeadersMatch_(currentHeaders, previousHeaders)) {
+    sheet.insertColumnAfter(previousHeaders.indexOf('Gmail Message ID') + 1);
+    sheet.getRange(1, PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL') + 1).setValue('Gmail URL');
+    currentHeaders = PROJECT_ID_SUMMARY_HEADERS.slice();
+  }
   if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS &&
       projectIdSummaryHeadersMatch_(currentHeaders, compactHeaders)) {
     migrateProjectIdSummarySchema_(sheet, compactHeaders);
@@ -2760,6 +2826,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(projectIdSummaryColumn_('Project ID'), 280);
   sheet.setColumnWidth(projectIdSummaryColumn_('Application ID'), 220);
   sheet.setColumnWidth(projectIdSummaryColumn_('Project URL'), 520);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Aurora Shade Report URL'), 420);
   sheet.setColumnWidth(projectIdSummaryColumn_('Address'), 300);
   sheet.setColumnWidth(projectIdSummaryColumn_('State'), 90);
   sheet.setColumnWidth(projectIdSummaryColumn_('Region'), 120);
@@ -2784,8 +2851,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(projectIdSummaryColumn_('Map Data Source'), 180);
   sheet.setColumnWidth(projectIdSummaryColumn_('RGB Basemap URL'), 520);
   sheet.setColumnWidth(aiContextStartColumn, 180);
-  sheet.setColumnWidth(aiContextStartColumn + 1, 360);
-  sheet.setColumnWidths(aiContextStartColumn + 2, 2, 520);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Gmail URL'), 520);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Required Evidence'), 360);
+  sheet.setColumnWidths(projectIdSummaryColumn_('Technical Notes'), 2, 520);
   sheet.setColumnWidth(latestAiStartColumn, 180);
   sheet.setColumnWidths(latestAiStartColumn + 1, 2, 175);
   sheet.setColumnWidth(latestAiStartColumn + 3, 165);
@@ -3026,7 +3094,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       startRow,
       aiContextStartColumn,
       rowCount,
-      PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length,
+      PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length + 1,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);
@@ -3176,6 +3244,20 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
 }
 
 function setProjectIdSummaryRichLinks_(sheet, rows) {
+  const shadeReportColumn = PROJECT_ID_SUMMARY_HEADERS.indexOf('Aurora Shade Report URL');
+  sheet.getRange(2, shadeReportColumn + 1, rows.length, 1).setRichTextValues(rows.map(row => {
+    const url = safeProjectIdSummaryUrl_(row[shadeReportColumn]);
+    const builder = SpreadsheetApp.newRichTextValue().setText(url);
+    if (url) builder.setLinkUrl(url);
+    return [builder.build()];
+  }));
+  const gmailUrlColumn = PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL');
+  sheet.getRange(2, gmailUrlColumn + 1, rows.length, 1).setRichTextValues(rows.map(row => {
+    const url = safeProjectIdSummaryUrl_(row[gmailUrlColumn]);
+    const builder = SpreadsheetApp.newRichTextValue().setText(url);
+    if (url) builder.setLinkUrl(url);
+    return [builder.build()];
+  }));
   const richUrls = rows.map((row) => {
     const url = String(
       row[PROJECT_ID_SUMMARY_PROJECT_URL_INDEX] || '',

@@ -20,7 +20,20 @@ No web-app deployment is required.
 
 Comparison delta outputs (formerly BA–BU) are disabled in Project ID Summary.
 Refresh removes those columns and does not load their comparison values.
-Engine Version now follows Status Order at BA, with dates at BB–BE.
+Engine Version follows Status Order at BC, with dates at BD–BG after adding both URL columns.
+
+Project ID Summary retains Gmail Message ID (AN), which Category Explorer uses
+for its email join. Gmail URL (AO) is copied from Emails / Google Group URL by
+matching Application ID to Case ID and selecting the greatest Received At.
+For equal timestamps, the later source row wins. A missing URL on the latest
+email remains blank rather than using an older message. The refresh inserts the
+new column without replacing the message identifiers or other project data.
+
+Aurora Shade Report URL (D) matches Project ID to PDF Analysis and copies Source
+PDF URL from the record with the greatest Source Received At, not Analyzed At.
+For equal receipt timestamps, the later source row wins. A missing URL on the
+latest record stays blank. Refresh inserts this column after Project URL while
+preserving existing data and updating header-based formulas and formatting.
 To restore these optional outputs, set
 `PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = true` in ProjectIdSummary.gs,
 save it in Apps Script and refresh the summary. Existing comparison source
@@ -30,8 +43,8 @@ Every Project ID Summary refresh orders complete rows by `Created At`, newest
 first. Missing or invalid dates appear last, with Project ID as the deterministic
 tie-breaker. Manual sorting is replaced on the next summary refresh.
 
-Y/Z/AA use live conditional formatting: boolean TRUE has the same light green
-as AX (`#b7e1cd`), FALSE has light red (`#f4cccc`), and blanks stay white.
+Z/AA/AB use live conditional formatting: boolean TRUE has the same light green
+as the production tolerance column (`#b7e1cd`), FALSE has light red (`#f4cccc`), and blanks stay white.
 `setupProjectIdSummaryBooleanColors()` installs only these styles, without
 rewriting formulas or data. Each summary refresh maintains the two rules and
 extends their range to the available rows while preserving unrelated rules.
