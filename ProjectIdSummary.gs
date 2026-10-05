@@ -444,6 +444,9 @@ PROJECT_ID_SUMMARY_HEADERS.splice(
   PROJECT_ID_SUMMARY_HEADERS.indexOf('Last Email Received At') + 1, 0,
   PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER,
 );
+const PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_COUNT_MOVE = PROJECT_ID_SUMMARY_HEADERS.slice();
+PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf('Email Count'), 1);
+PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf('Snapshot Date'), 0, 'Email Count');
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
@@ -2455,6 +2458,14 @@ function insertProjectIdSummaryEmailDaysColumn_(sheet, currentHeaders) {
   currentHeaders.splice(index, 0, PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER);
 }
 
+function moveProjectIdSummaryEmailCountColumn_(sheet, currentHeaders) {
+  if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_COUNT_MOVE)) return;
+  const sourceIndex = currentHeaders.indexOf('Email Count');
+  const destinationIndex = currentHeaders.indexOf('Snapshot Date');
+  sheet.moveColumns(sheet.getRange(1, sourceIndex + 1, sheet.getMaxRows(), 1), destinationIndex + 1);
+  currentHeaders.splice(destinationIndex - 1, 0, currentHeaders.splice(sourceIndex, 1)[0]);
+}
+
 function moveProjectIdSummaryDateColumns_(sheet, currentHeaders) {
   if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS)) return;
   // Move actual columns so Sheets also updates formulas in dependent tabs.
@@ -2517,6 +2528,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   }
   moveProjectIdSummaryDateColumns_(sheet, currentHeaders);
   insertProjectIdSummaryEmailDaysColumn_(sheet, currentHeaders);
+  moveProjectIdSummaryEmailCountColumn_(sheet, currentHeaders);
   if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS &&
       projectIdSummaryHeadersMatch_(currentHeaders, compactHeaders)) {
     migrateProjectIdSummarySchema_(sheet, compactHeaders);
@@ -2886,6 +2898,8 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.getRange(1, projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER))
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
   sheet.setColumnWidth(projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER), 200);
+  sheet.getRange(1, projectIdSummaryColumn_('Email Count'))
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
   sheet.setFrozenRows(1);
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
   sheet.setColumnWidth(projectIdSummaryColumn_('Project ID'), 280);
@@ -2907,7 +2921,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.showColumns(projectIdSummaryColumn_('kWh/kW'), 4);
   sheet.setColumnWidths(projectIdSummaryColumn_('Solar Panel'), 2, 220);
   sheet.setColumnWidths(projectIdSummaryColumn_('Installer'), 2, 180);
-  sheet.setColumnWidths(projectIdSummaryColumn_('Email Count'), 3, 135);
+  ['Email Count', 'Attachment Count', 'Analyzed PDF Count'].forEach(header => {
+    sheet.setColumnWidth(projectIdSummaryColumn_(header), 135);
+  });
   sheet.setColumnWidths(
     projectIdSummaryColumn_('First Email Received At'),
     2,
@@ -3119,14 +3135,10 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       .setBackground('#ffffff').setNumberFormat('@').setWrap(true);
   });
   formatProjectIdSummaryEnergyRows_(sheet, startRow, rowCount);
-  sheet
-    .getRange(
-      startRow,
-      projectIdSummaryColumn_('Email Count'),
-      rowCount,
-      3,
-    )
-    .setNumberFormat('#,##0');
+  ['Email Count', 'Attachment Count', 'Analyzed PDF Count'].forEach(header => {
+    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
+      .setNumberFormat('#,##0');
+  });
   sheet
     .getRange(
       startRow,
@@ -3254,6 +3266,9 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   sheet.getRange(startRow, projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER), rowCount, 1)
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
     .setNumberFormat('0').setWrap(true);
+  sheet.getRange(startRow, projectIdSummaryColumn_('Email Count'), rowCount, 1)
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
+    .setNumberFormat('#,##0').setWrap(true);
 }
 
 function projectIdSummaryHeadersMatch_(currentHeaders, expectedHeaders) {

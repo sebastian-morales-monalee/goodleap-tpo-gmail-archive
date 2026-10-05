@@ -6,8 +6,8 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'Proje
 test('latest case email URL preserves message identifier and schema offsets', () => {
   const ctx = vm.createContext({console, Date});
   vm.runInContext(source, ctx);
-  assert.equal(vm.runInContext("PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID')", ctx), 36);
-  assert.equal(vm.runInContext("PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL')", ctx), 37);
+  assert.equal(vm.runInContext("PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID')", ctx), 35);
+  assert.equal(vm.runInContext("PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL')", ctx), 36);
   assert.equal(vm.runInContext("PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX === PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh')", ctx), true);
   const rows = [['Case ID', 'Received At', 'Gmail Message ID', 'Google Group URL'],
     ['26-42-005919', new Date('2026-09-30T12:00:00Z'), 'new', 'https://groups.google.com/new'],

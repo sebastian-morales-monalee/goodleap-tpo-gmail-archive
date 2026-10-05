@@ -20,17 +20,18 @@ No web-app deployment is required.
 
 Comparison delta outputs (formerly BA–BU) are disabled in Project ID Summary.
 Refresh removes those columns and does not load their comparison values.
-Engine Version follows Status Order at AY, with project dates at AZ–BC.
-The date block continues with Latest AI Email Received At (BD), First Email
-Received At (BE), Last Email Received At (BF), Days Between First and Last Email
-(BG), and Snapshot Date (BH). Email days are the elapsed timestamp difference
+Engine Version follows Status Order at AX, with project dates at AY–BB.
+The date block continues with Latest AI Email Received At (BC), First Email
+Received At (BD), Last Email Received At (BE), Days Between First and Last Email
+(BF), Email Count (BG), and Snapshot Date (BH). Email Count is moved, not duplicated,
+and uses the green metadata style with integer formatting. Email days are the elapsed timestamp difference
 divided by 24 hours and rounded up. Identical timestamps return zero; missing,
 invalid, or reversed dates remain blank. Each refresh recalculates this integer.
 All eight dates use the green metadata style. Refresh physically migrates the
 previous columns once, then preserves this layout on every update.
 
-Project ID Summary retains Gmail Message ID (AK), which Category Explorer uses
-for its email join. Gmail URL (AL) is copied from Emails / Google Group URL by
+Project ID Summary retains Gmail Message ID (AJ), which Category Explorer uses
+for its email join. Gmail URL (AK) is copied from Emails / Google Group URL by
 matching Application ID to Case ID and selecting the greatest Received At.
 For equal timestamps, the later source row wins. A missing URL on the latest
 email remains blank rather than using an older message. The refresh inserts the
