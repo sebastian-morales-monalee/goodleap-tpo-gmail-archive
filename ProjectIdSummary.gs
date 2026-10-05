@@ -438,6 +438,12 @@ PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS.forEach(header => {
   PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf(header), 1);
 });
 PROJECT_ID_SUMMARY_HEADERS.push(...PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS);
+const PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_DAYS = PROJECT_ID_SUMMARY_HEADERS.slice();
+const PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER = 'Days Between First and Last Email';
+PROJECT_ID_SUMMARY_HEADERS.splice(
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Last Email Received At') + 1, 0,
+  PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER,
+);
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
@@ -2423,14 +2429,36 @@ function projectIdSummarySimpleRowsEqual_(leftRows, rightRows) {
 }
 
 function orderProjectIdSummaryBuiltRow_(row) {
-  return PROJECT_ID_SUMMARY_HEADERS.map(header =>
-    row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf(header)]);
+  return PROJECT_ID_SUMMARY_HEADERS.map(header => {
+    if (header === PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER) {
+      return projectIdSummaryEmailDays_(
+        row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf('First Email Received At')],
+        row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf('Last Email Received At')],
+      );
+    }
+    return row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf(header)];
+  });
+}
+
+function projectIdSummaryEmailDays_(firstValue, lastValue) {
+  const first = normalizeProjectIdSummaryDate_(firstValue);
+  const last = normalizeProjectIdSummaryDate_(lastValue);
+  if (!first || !last || last.getTime() < first.getTime()) return '';
+  return Math.ceil((last.getTime() - first.getTime()) / 86400000);
+}
+
+function insertProjectIdSummaryEmailDaysColumn_(sheet, currentHeaders) {
+  if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_DAYS)) return;
+  const index = currentHeaders.indexOf('Last Email Received At') + 1;
+  sheet.insertColumnAfter(index);
+  sheet.getRange(1, index + 1).setValue(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER);
+  currentHeaders.splice(index, 0, PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER);
 }
 
 function moveProjectIdSummaryDateColumns_(sheet, currentHeaders) {
   if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS)) return;
   // Move actual columns so Sheets also updates formulas in dependent tabs.
-  PROJECT_ID_SUMMARY_HEADERS.forEach((header, targetIndex) => {
+  PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_DAYS.forEach((header, targetIndex) => {
     const sourceIndex = currentHeaders.indexOf(header);
     if (sourceIndex !== targetIndex) {
       sheet.moveColumns(sheet.getRange(1, sourceIndex + 1, sheet.getMaxRows(), 1), targetIndex + 1);
@@ -2488,6 +2516,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     currentHeaders = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.slice();
   }
   moveProjectIdSummaryDateColumns_(sheet, currentHeaders);
+  insertProjectIdSummaryEmailDaysColumn_(sheet, currentHeaders);
   if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS &&
       projectIdSummaryHeadersMatch_(currentHeaders, compactHeaders)) {
     migrateProjectIdSummarySchema_(sheet, compactHeaders);
@@ -2854,6 +2883,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
     sheet.setColumnWidth(projectIdSummaryColumn_(header), 180);
   });
+  sheet.getRange(1, projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER))
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
+  sheet.setColumnWidth(projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER), 200);
   sheet.setFrozenRows(1);
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
   sheet.setColumnWidth(projectIdSummaryColumn_('Project ID'), 280);
@@ -3219,6 +3251,9 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
       .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT).setWrap(true);
   });
+  sheet.getRange(startRow, projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER), rowCount, 1)
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
+    .setNumberFormat('0').setWrap(true);
 }
 
 function projectIdSummaryHeadersMatch_(currentHeaders, expectedHeaders) {

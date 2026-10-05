@@ -22,7 +22,10 @@ Comparison delta outputs (formerly BA–BU) are disabled in Project ID Summary.
 Refresh removes those columns and does not load their comparison values.
 Engine Version follows Status Order at AY, with project dates at AZ–BC.
 The date block continues with Latest AI Email Received At (BD), First Email
-Received At (BE), Last Email Received At (BF), and Snapshot Date (BG).
+Received At (BE), Last Email Received At (BF), Days Between First and Last Email
+(BG), and Snapshot Date (BH). Email days are the elapsed timestamp difference
+divided by 24 hours and rounded up. Identical timestamps return zero; missing,
+invalid, or reversed dates remain blank. Each refresh recalculates this integer.
 All eight dates use the green metadata style. Refresh physically migrates the
 previous columns once, then preserves this layout on every update.
 
