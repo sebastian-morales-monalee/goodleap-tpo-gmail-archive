@@ -429,6 +429,15 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter
 // Keep the message identifier used by Category Explorer; expose the latest case link separately.
 PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID') + 1, 0, 'Gmail URL');
 PROJECT_ID_SUMMARY_HEADERS.splice(3, 0, 'Aurora Shade Report URL');
+const PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS = PROJECT_ID_SUMMARY_HEADERS.slice();
+const PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS = [
+  'Latest AI Email Received At', 'First Email Received At',
+  'Last Email Received At', 'Snapshot Date',
+];
+PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS.forEach(header => {
+  PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf(header), 1);
+});
+PROJECT_ID_SUMMARY_HEADERS.push(...PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS);
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
@@ -586,12 +595,10 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14 =
   );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
   PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID');
-const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
-  PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX +
-  PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length + 1;
+const PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh');
 const PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX =
-  PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX +
-  PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length;
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Production Category Group');
 const PROJECT_ID_SUMMARY_CATEGORIES_INDEX =
   PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
 const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX =
@@ -736,15 +743,15 @@ function previewProjectIdSummary() {
     aiSummary:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 4] || '',
     latestAiEmailReceivedAt:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX] || '',
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Latest AI Email Received At')] || '',
     proposedProductionKwh:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh')],
     benchmarkProductionKwh:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Benchmark Production kWh')],
     '(Bench-Art)/Art %':
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')],
     tolerancePercent:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Tolerance %')],
     productionCategoryGroup:
       row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX] || '',
     categories: row[PROJECT_ID_SUMMARY_CATEGORIES_INDEX] || '',
@@ -1032,6 +1039,9 @@ function buildProjectIdSummary_(spreadsheet, options) {
     ));
   });
 
+  rows.forEach((row, index) => {
+    rows[index] = orderProjectIdSummaryBuiltRow_(row);
+  });
   sortProjectIdSummaryByCreatedAt_(rows);
 
   return {
@@ -1139,29 +1149,29 @@ function buildProjectIdSummaryStats_(summary) {
       (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('AI Summary')],
     ).length,
     projectsWithLatestAiAnalysis: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Latest AI Email Received At')],
     ).length,
     projectsWithoutLatestAiAnalysis: summary.rows.filter(
-      (row) => !row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX],
+      (row) => !row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Latest AI Email Received At')],
     ).length,
     projectsWithProposedProduction: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh')],
       ),
     ).length,
     projectsWithBenchmarkProduction: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Benchmark Production kWh')],
       ),
     ).length,
     projectsWithBenchMinusArtOverArtPercent: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')],
       ),
     ).length,
     projectsWithTolerancePercent: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Tolerance %')],
       ),
     ).length,
     projectsWithinCalculatedTolerance: summary.rows.filter(
@@ -2412,6 +2422,23 @@ function projectIdSummarySimpleRowsEqual_(leftRows, rightRows) {
   );
 }
 
+function orderProjectIdSummaryBuiltRow_(row) {
+  return PROJECT_ID_SUMMARY_HEADERS.map(header =>
+    row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf(header)]);
+}
+
+function moveProjectIdSummaryDateColumns_(sheet, currentHeaders) {
+  if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS)) return;
+  // Move actual columns so Sheets also updates formulas in dependent tabs.
+  PROJECT_ID_SUMMARY_HEADERS.forEach((header, targetIndex) => {
+    const sourceIndex = currentHeaders.indexOf(header);
+    if (sourceIndex !== targetIndex) {
+      sheet.moveColumns(sheet.getRange(1, sourceIndex + 1, sheet.getMaxRows(), 1), targetIndex + 1);
+      currentHeaders.splice(targetIndex, 0, currentHeaders.splice(sourceIndex, 1)[0]);
+    }
+  });
+}
+
 function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   let sheet = spreadsheet.getSheetByName(
     PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME,
@@ -2446,7 +2473,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   );
   compactHeaders.splice(compactHeaders.indexOf('Gmail Message ID') + 1, 0, 'Gmail URL');
   compactHeaders.splice(3, 0, 'Aurora Shade Report URL');
-  const beforeAurora = PROJECT_ID_SUMMARY_HEADERS.filter(header => header !== 'Aurora Shade Report URL');
+  const beforeAurora = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.filter(header => header !== 'Aurora Shade Report URL');
   const beforeBothLinks = beforeAurora.filter(header => header !== 'Gmail URL');
   if (projectIdSummaryHeadersMatch_(currentHeaders, beforeAurora) ||
       projectIdSummaryHeadersMatch_(currentHeaders, beforeBothLinks)) {
@@ -2454,12 +2481,13 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     sheet.getRange(1, 4).setValue('Aurora Shade Report URL');
     currentHeaders.splice(3, 0, 'Aurora Shade Report URL');
   }
-  const previousHeaders = PROJECT_ID_SUMMARY_HEADERS.filter(header => header !== 'Gmail URL');
+  const previousHeaders = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.filter(header => header !== 'Gmail URL');
   if (projectIdSummaryHeadersMatch_(currentHeaders, previousHeaders)) {
     sheet.insertColumnAfter(previousHeaders.indexOf('Gmail Message ID') + 1);
-    sheet.getRange(1, PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL') + 1).setValue('Gmail URL');
-    currentHeaders = PROJECT_ID_SUMMARY_HEADERS.slice();
+    sheet.getRange(1, PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf('Gmail URL') + 1).setValue('Gmail URL');
+    currentHeaders = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.slice();
   }
+  moveProjectIdSummaryDateColumns_(sheet, currentHeaders);
   if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS &&
       projectIdSummaryHeadersMatch_(currentHeaders, compactHeaders)) {
     migrateProjectIdSummarySchema_(sheet, compactHeaders);
@@ -2792,7 +2820,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     .setVerticalAlignment('middle')
     .setWrap(true);
   const aiContextStartColumn = PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1;
-  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
+  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX + 1;
   const categoryGroupColumn = PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
   const categoriesColumn = PROJECT_ID_SUMMARY_CATEGORIES_INDEX + 1;
   const toleranceRangeColumn = PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
@@ -2821,6 +2849,11 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     .setBackground(
       PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND,
     );
+  PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS.forEach(header => {
+    sheet.getRange(1, projectIdSummaryColumn_(header), 1, 1)
+      .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
+    sheet.setColumnWidth(projectIdSummaryColumn_(header), 180);
+  });
   sheet.setFrozenRows(1);
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
   sheet.setColumnWidth(projectIdSummaryColumn_('Project ID'), 280);
@@ -2854,10 +2887,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(projectIdSummaryColumn_('Gmail URL'), 520);
   sheet.setColumnWidth(projectIdSummaryColumn_('Required Evidence'), 360);
   sheet.setColumnWidths(projectIdSummaryColumn_('Technical Notes'), 2, 520);
-  sheet.setColumnWidth(latestAiStartColumn, 180);
-  sheet.setColumnWidths(latestAiStartColumn + 1, 2, 175);
-  sheet.setColumnWidth(latestAiStartColumn + 3, 165);
-  sheet.setColumnWidth(latestAiStartColumn + 4, 135);
+  sheet.setColumnWidths(latestAiStartColumn, 2, 175);
+  sheet.setColumnWidth(latestAiStartColumn + 2, 165);
+  sheet.setColumnWidth(latestAiStartColumn + 3, 135);
   sheet.setColumnWidth(categoryGroupColumn, 260);
   sheet.setColumnWidth(categoriesColumn, 240);
   sheet.setColumnWidth(toleranceRangeColumn, 190);
@@ -3099,27 +3131,24 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);
 
-  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
+  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX + 1;
   sheet
     .getRange(
       startRow,
       latestAiStartColumn,
       rowCount,
-      PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length,
+      PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length - 1,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);
   sheet
-    .getRange(startRow, latestAiStartColumn, rowCount, 1)
-    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
-  sheet
-    .getRange(startRow, latestAiStartColumn + 1, rowCount, 2)
+    .getRange(startRow, latestAiStartColumn, rowCount, 2)
     .setNumberFormat('0.###');
   sheet
-    .getRange(startRow, latestAiStartColumn + 3, rowCount, 1)
+    .getRange(startRow, latestAiStartColumn + 2, rowCount, 1)
     .setNumberFormat('0.00%');
   sheet
-    .getRange(startRow, latestAiStartColumn + 4, rowCount, 1)
+    .getRange(startRow, latestAiStartColumn + 3, rowCount, 1)
     .setNumberFormat('0.##');
   sheet
     .getRange(
@@ -3185,6 +3214,11 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   sheet
     .getRange(startRow, metadataStartColumn + 1, rowCount, 4)
     .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
+  PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS.forEach(header => {
+    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
+      .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
+      .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT).setWrap(true);
+  });
 }
 
 function projectIdSummaryHeadersMatch_(currentHeaders, expectedHeaders) {

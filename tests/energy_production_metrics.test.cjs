@@ -69,7 +69,7 @@ const schema = vm.runInContext(`({current:PROJECT_ID_SUMMARY_HEADERS,
 assert.equal(schema.current.length - schema.previous.length, 8 + 2 - 21);
 assert.equal(schema.current.indexOf('active_panel_count'), 7);
 assert.equal(schema.current.indexOf('reference_dc_production_kwh'), 14);
-assert.equal(schema.current.indexOf('Snapshot Date'), 20);
+assert.equal(schema.current.indexOf('Snapshot Date'), 58);
 assert.equal(context.projectEnergyMetricCells_(actual).length, schema.energy.length);
 // Schema migration shifts only by header name, preserving email/category fields.
 let migrated;
@@ -88,9 +88,9 @@ for (const header of ['Project ID','AI Summary','Categories','Gmail Message ID',
 assert.equal(migrated[schema.current.indexOf('Snapshot Version ID')], '');
 const snapshotHeaders = vm.runInContext('LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18', context);
 assert.equal(schema.current.length - snapshotHeaders.length, 4 + 2 - 21);
-assert.deepEqual(Array.from(schema.current.slice(24,28)),
+assert.deepEqual(Array.from(schema.current.slice(23,27)),
   ['kWh/kW','kWh/kW >= MIN','Offset <= 110%','110 % < offset ≤ 150 %']);
-assert.equal(schema.current.indexOf('Solar Panel'),28);
+assert.equal(schema.current.indexOf('Solar Panel'),27);
 const rules = context.goodLeapConditionalLookup_(context.defaultGoodLeapConditionalRows_());
 assert.equal(rules.size,50); // 49 states plus DC; RI was not supplied.
 assert.equal(rules.has('RI'),false);

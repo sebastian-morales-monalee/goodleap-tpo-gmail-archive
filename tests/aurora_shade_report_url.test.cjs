@@ -35,7 +35,7 @@ test('new header and linked fields maintain full-row schema and dynamic formulas
   const headers = Array.from(vm.runInContext('PROJECT_ID_SUMMARY_HEADERS', ctx));
   assert.deepEqual(headers.slice(0, 5), ['Project ID', 'Application ID', 'Project URL', 'Aurora Shade Report URL', 'Address']);
   assert.equal(vm.runInContext('PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX', ctx), headers.indexOf('Gmail Message ID'));
-  assert.equal(vm.runInContext('PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX', ctx), headers.indexOf('Latest AI Email Received At'));
+  assert.equal(vm.runInContext('PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX', ctx), headers.indexOf('Proposed Production kWh'));
   assert.equal(vm.runInContext('PROJECT_ID_SUMMARY_POSTHOG_START_INDEX', ctx), headers.indexOf('Engine Version'));
   const formulas = ctx.projectIdSummaryConditionalFormulas_(2, 51);
   assert.match(formulas[0], /R2\/J2/);
