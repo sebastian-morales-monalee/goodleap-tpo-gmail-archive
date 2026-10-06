@@ -1269,6 +1269,9 @@ save the updated `OpenAIAnalysis.gs` in the same Apps Script project, then:
    batch size per run, updates the full analysis of each project's latest
    already analyzed email, and skips successfully versioned rows on reruns.
    If it logs errors, resolve them and rerun; failed rows remain unchanged.
+   When no pending rows or errors remain, it automatically publishes the
+   summary using cached energy/map metadata and refreshes the AI dashboard.
+   This classification-only publication does not requery snapshot energy data.
 5. Run `refreshProjectIdSummary()` to publish the latest email's categories,
    AI Summary, Required Evidence, and Technical Notes. Run
    `refreshAIAnalysisDashboard()` to update category-based charts and counts.
@@ -1281,12 +1284,23 @@ categories. It removes quoted prior replies, including split-line `On ...
 wrote:` headers, before sending the latest message to OpenAI. This prevents a
 previous production or equipment rejection from becoming a current topic when
 the newest reply only asks for a finalized layout and missing documentation.
-`Category Rules Version` is `2026-09-25-production-tolerance-v3`, so earlier analyses
+`Category Rules Version` is `2026-10-06-scoped-rejection-v5`, so earlier analyses
 are eligible for the bounded reclassification even if a previous rules
 revision was already run. Check representative Project ID Summary rows after
 the refresh: an explicit missing-document request must contain Documentation;
-a within-tolerance or approved production statement alone must not produce
-Production, while an outside-tolerance statement must retain it; routine
+a within-tolerance or approved production statement must not produce
+Production. Production requires an explicit yield/benchmark issue and numeric
+tolerance strictly below -5% or above +15%; both endpoints are within range.
+Missing numeric tolerance never becomes zero and flags a stated production
+issue for human review. The category evidence block starts at `Hello Team`
+and ends before `Proposed Production` (or `For additional reference`/reminders
+when the production marker is absent). Full email text remains available for
+numeric extraction. Every AI-selected named category requires an exact quote
+from this block; evidence is internal and does not change the sheet schema.
+Offset reminders, generic uploads, and conditional re-review instructions are
+not category evidence. Documentation and Communication / Follow-up require
+specific unresolved requirements, not submitted documents or routine boilerplate;
+routine
 greetings and reply footers must not create Communication /
 Follow-up. AI classifications still require human review for ambiguous emails.
 
