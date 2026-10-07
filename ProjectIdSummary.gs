@@ -404,7 +404,11 @@ const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER =
 const PROJECT_ID_SUMMARY_STATUS_HEADER = 'Status';
 const PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER = 'Status Order';
 
-const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
+// Re-enable explicitly to restore the optional comparison-delta outputs.
+const PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = false;
+const PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS =
+  PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS ? PROJECT_ID_SUMMARY_DELTA_HEADERS : [];
+const PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS,
   PROJECT_ID_SUMMARY_LATEST_AI_HEADERS,
   [
@@ -417,6 +421,32 @@ const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
   PROJECT_ID_SUMMARY_DELTA_HEADERS,
   PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
 );
+
+const PROJECT_ID_SUMMARY_HEADERS = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
+  header => PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS ||
+    !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
+);
+// Keep the message identifier used by Category Explorer; expose the latest case link separately.
+PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID') + 1, 0, 'Gmail URL');
+PROJECT_ID_SUMMARY_HEADERS.splice(3, 0, 'Aurora Shade Report URL');
+const PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS = PROJECT_ID_SUMMARY_HEADERS.slice();
+const PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS = [
+  'Latest AI Email Received At', 'First Email Received At',
+  'Last Email Received At', 'Snapshot Date',
+];
+PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS.forEach(header => {
+  PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf(header), 1);
+});
+PROJECT_ID_SUMMARY_HEADERS.push(...PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS);
+const PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_DAYS = PROJECT_ID_SUMMARY_HEADERS.slice();
+const PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER = 'Days Between First and Last Email';
+PROJECT_ID_SUMMARY_HEADERS.splice(
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Last Email Received At') + 1, 0,
+  PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER,
+);
+const PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_COUNT_MOVE = PROJECT_ID_SUMMARY_HEADERS.slice();
+PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf('Email Count'), 1);
+PROJECT_ID_SUMMARY_HEADERS.splice(PROJECT_ID_SUMMARY_HEADERS.indexOf('Snapshot Date'), 0, 'Email Count');
 
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
   LEGACY_PROJECT_ID_SUMMARY_BASE_HEADERS_PRE_ENERGY.concat(
@@ -432,7 +462,7 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V15 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 
-const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18 = PROJECT_ID_SUMMARY_HEADERS.filter(
+const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18 = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
   header => !PROJECT_ID_SUMMARY_CONDITIONAL_HEADERS.includes(header),
 );
 const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V17 = LEGACY_PROJECT_ID_SUMMARY_HEADERS_V18.filter(
@@ -573,13 +603,11 @@ const LEGACY_PROJECT_ID_SUMMARY_HEADERS_V14 =
     PROJECT_ID_SUMMARY_POSTHOG_HEADERS,
   );
 const PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX =
-  PROJECT_ID_SUMMARY_BASE_HEADERS.length;
-const PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX =
-  PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX +
-  PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length;
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail Message ID');
+const PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX =
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh');
 const PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX =
-  PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX +
-  PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length;
+  PROJECT_ID_SUMMARY_HEADERS.indexOf('Production Category Group');
 const PROJECT_ID_SUMMARY_CATEGORIES_INDEX =
   PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
 const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX =
@@ -592,7 +620,7 @@ const PROJECT_ID_SUMMARY_DELTA_START_INDEX =
   PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1;
 const PROJECT_ID_SUMMARY_POSTHOG_START_INDEX =
   PROJECT_ID_SUMMARY_DELTA_START_INDEX +
-  PROJECT_ID_SUMMARY_DELTA_HEADERS.length;
+  PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.length;
 const PROJECT_ID_SUMMARY_EMAIL_COUNT_INDEX =
   PROJECT_ID_SUMMARY_HEADERS.indexOf('Email Count');
 const PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX =
@@ -696,6 +724,7 @@ function previewProjectIdSummary() {
     projectId: row[0],
     applicationId: row[PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX] || '',
     projectUrl: row[PROJECT_ID_SUMMARY_PROJECT_URL_INDEX] || '',
+    auroraShadeReportUrl: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Aurora Shade Report URL')] || '',
     address: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Address')] || '',
     state: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('State')] || '',
     region: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Region')] || '',
@@ -715,22 +744,23 @@ function previewProjectIdSummary() {
     rgbBasemapUrl: row[PROJECT_ID_SUMMARY_RGB_BASEMAP_URL_INDEX] || '',
     gmailMessageId:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX] || '',
+    gmailUrl: row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL')] || '',
     requiredEvidence:
-      row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1] || '',
-    technicalNotes:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 2] || '',
-    aiSummary:
+    technicalNotes:
       row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 3] || '',
+    aiSummary:
+      row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 4] || '',
     latestAiEmailReceivedAt:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX] || '',
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Latest AI Email Received At')] || '',
     proposedProductionKwh:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh')],
     benchmarkProductionKwh:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Benchmark Production kWh')],
     '(Bench-Art)/Art %':
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')],
     tolerancePercent:
-      row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
+      row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Tolerance %')],
     productionCategoryGroup:
       row[PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX] || '',
     categories: row[PROJECT_ID_SUMMARY_CATEGORIES_INDEX] || '',
@@ -738,7 +768,7 @@ function previewProjectIdSummary() {
       row[PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX],
     status: row[PROJECT_ID_SUMMARY_STATUS_INDEX] || '',
     statusOrder: row[PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX] || '',
-    shadeReportDeltas: PROJECT_ID_SUMMARY_DELTA_HEADERS.reduce(
+    shadeReportDeltas: PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.reduce(
       (result, header, offset) => {
         result[header] = row[PROJECT_ID_SUMMARY_DELTA_START_INDEX + offset];
         return result;
@@ -849,6 +879,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
   const projects = loadProjectIdSummaryBaseProjects_(spreadsheet);
   const pdfApplicationIds =
     loadProjectIdSummaryPdfApplicationIds_(spreadsheet);
+  const latestShadeReports = loadProjectIdSummaryLatestShadeReports_(spreadsheet);
   const emailMetrics = loadProjectIdSummaryEmailMetrics_(spreadsheet);
   const latestArchivedEmails =
     loadProjectIdSummaryLatestArchivedEmails_(spreadsheet);
@@ -857,7 +888,8 @@ function buildProjectIdSummary_(spreadsheet, options) {
     PROJECT_ID_SUMMARY_CONFIG.PDF_SHEET_NAME,
   );
   const attachmentCounts = loadProjectIdSummaryAttachmentCounts_(spreadsheet);
-  const comparisonDeltas = loadProjectIdSummaryComparisonDeltas_(spreadsheet);
+  const comparisonDeltas = PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
+    ? loadProjectIdSummaryComparisonDeltas_(spreadsheet) : new Map();
   const existingMapData = options && options.existingMapData
     ? options.existingMapData
     : new Map();
@@ -939,9 +971,10 @@ function buildProjectIdSummary_(spreadsheet, options) {
 
     const refreshedMapData = mapLookup.byProjectId.get(project.key);
     const mapData = refreshedMapData || existingMapData.get(project.key) || {};
-    const deltaValues = comparisonDeltas.get(project.key) ||
-      Array(PROJECT_ID_SUMMARY_DELTA_HEADERS.length).fill('');
-    if (!comparisonDeltas.has(project.key)) {
+    const deltaValues = PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
+      ? comparisonDeltas.get(project.key) || Array(PROJECT_ID_SUMMARY_DELTA_HEADERS.length).fill('')
+      : [];
+    if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS && !comparisonDeltas.has(project.key)) {
       projectsWithoutComparisonDeltas += 1;
     }
     const refreshedProjectMetadata =
@@ -964,6 +997,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       project.projectId,
       formatProjectIdSummaryApplicationIds_(applicationIds),
       project.projectUrl,
+      (latestShadeReports.get(project.key) || {}).url || '',
       projectMetadata.address || '',
       projectMetadata.state || '',
       getProjectIdSummaryRegion_(projectMetadata.state, stateRegionLookup),
@@ -981,6 +1015,7 @@ function buildProjectIdSummary_(spreadsheet, options) {
       mapData.mapDataSource || '',
       mapData.rgbBasemapUrl || '',
       email.latestGmailMessageId,
+      getProjectIdSummaryLatestGmailUrl_(applicationIds, latestArchivedEmails),
       email.latestRequiredEvidence,
       email.latestTechnicalNotes,
       email.latestAiSummary,
@@ -1013,6 +1048,9 @@ function buildProjectIdSummary_(spreadsheet, options) {
     ));
   });
 
+  rows.forEach((row, index) => {
+    rows[index] = orderProjectIdSummaryBuiltRow_(row);
+  });
   sortProjectIdSummaryByCreatedAt_(rows);
 
   return {
@@ -1042,6 +1080,9 @@ function buildProjectIdSummary_(spreadsheet, options) {
 function buildProjectIdSummaryStats_(summary) {
   return {
     uniqueProjects: summary.rows.length,
+    projectsWithAuroraShadeReportUrl: summary.rows.filter(
+      row => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Aurora Shade Report URL')],
+    ).length,
     projectsWithApplicationIds: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_APPLICATION_ID_INDEX],
     ).length,
@@ -1057,8 +1098,9 @@ function buildProjectIdSummaryStats_(summary) {
     projectsWithoutEmails: summary.projectsWithoutEmails,
     projectsWithoutPdfs: summary.projectsWithoutPdfs,
     projectsWithoutAttachments: summary.projectsWithoutAttachments,
-    projectsWithComparisonDeltas:
-      summary.rows.length - summary.projectsWithoutComparisonDeltas,
+    comparisonDeltasEnabled: PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS,
+    projectsWithComparisonDeltas: PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
+      ? summary.rows.length - summary.projectsWithoutComparisonDeltas : 0,
     projectsWithoutComparisonDeltas: summary.projectsWithoutComparisonDeltas,
     projectsWithAddress: summary.rows.filter(
       (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Address')],
@@ -1107,38 +1149,38 @@ function buildProjectIdSummaryStats_(summary) {
       (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX],
     ).length,
     projectsWithLatestRequiredEvidence: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Required Evidence')],
     ).length,
     projectsWithLatestTechnicalNotes: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 2],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Technical Notes')],
     ).length,
     projectsWithLatestAiSummary: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 3],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('AI Summary')],
     ).length,
     projectsWithLatestAiAnalysis: summary.rows.filter(
-      (row) => row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX],
+      (row) => row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Latest AI Email Received At')],
     ).length,
     projectsWithoutLatestAiAnalysis: summary.rows.filter(
-      (row) => !row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX],
+      (row) => !row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Latest AI Email Received At')],
     ).length,
     projectsWithProposedProduction: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Proposed Production kWh')],
       ),
     ).length,
     projectsWithBenchmarkProduction: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 2],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Benchmark Production kWh')],
       ),
     ).length,
     projectsWithBenchMinusArtOverArtPercent: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 3],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')],
       ),
     ).length,
     projectsWithTolerancePercent: summary.rows.filter(
       (row) => Number.isFinite(
-        row[PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 4],
+        row[PROJECT_ID_SUMMARY_HEADERS.indexOf('Tolerance %')],
       ),
     ).length,
     projectsWithinCalculatedTolerance: summary.rows.filter(
@@ -1724,6 +1766,30 @@ function loadProjectIdSummaryBaseProjects_(spreadsheet) {
   return Array.from(projectsById.values());
 }
 
+/** Choose by source receipt time, never by analysis time or URL availability. */
+function loadProjectIdSummaryLatestShadeReports_(spreadsheet) {
+  const latest = new Map();
+  const sheet = spreadsheet.getSheetByName(PROJECT_ID_SUMMARY_CONFIG.PDF_SHEET_NAME);
+  if (!sheet || sheet.getLastRow() < 2) return latest;
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
+  const headers = values[0].map(value => String(value).trim());
+  const projectColumn = requireProjectIdSummaryHeader_(headers, 'Project ID', sheet.getName());
+  const receivedColumn = requireProjectIdSummaryHeader_(headers, 'Source Received At', sheet.getName());
+  const urlColumn = requireProjectIdSummaryHeader_(headers, 'Source PDF URL', sheet.getName());
+  values.slice(1).forEach((row, sequence) => {
+    const receivedAt = normalizeProjectIdSummaryDate_(row[receivedColumn]);
+    const timestamp = receivedAt ? receivedAt.getTime() : -Infinity;
+    splitProjectIdSummaryIds_(row[projectColumn]).forEach(key => {
+      const previous = latest.get(key);
+      if (!previous || timestamp > previous.timestamp ||
+          (timestamp === previous.timestamp && sequence > previous.sequence)) {
+        latest.set(key, {timestamp, sequence, url: safeProjectIdSummaryUrl_(row[urlColumn])});
+      }
+    });
+  });
+  return latest;
+}
+
 function loadProjectIdSummaryPdfApplicationIds_(spreadsheet) {
   const byProjectId = new Map();
   const sheet = spreadsheet.getSheetByName(
@@ -1934,18 +2000,33 @@ function loadProjectIdSummaryLatestArchivedEmails_(spreadsheet) {
   const messageIndex = requireProjectIdSummaryHeader_(
     headers, 'Gmail Message ID', sheet.getName(),
   );
+  const groupUrlIndex = requireProjectIdSummaryHeader_(headers, 'Google Group URL', sheet.getName());
   values.slice(1).forEach((row, sequence) => {
     const applicationId = String(row[applicationIndex] || '').trim();
     const messageId = String(row[messageIndex] || '').trim();
-    if (!applicationId || !messageId) return;
+    if (!applicationId) return;
     const receivedAt = normalizeProjectIdSummaryDate_(row[receivedIndex]);
     const timestamp = projectIdSummaryDateTime_(receivedAt);
     const previous = latest.get(applicationId);
     if (!previous || timestamp >= previous.timestamp) {
-      latest.set(applicationId, {messageId, timestamp, sequence});
+      latest.set(applicationId, {messageId, timestamp, sequence,
+        gmailUrl: safeProjectIdSummaryUrl_(row[groupUrlIndex])});
     }
   });
   return latest;
+}
+
+function getProjectIdSummaryLatestGmailUrl_(applicationIds, latest) {
+  let selected = null;
+  applicationIds.forEach((applicationId) => {
+    const candidate = latest.get(String(applicationId).trim());
+    if (candidate && (!selected || candidate.timestamp > selected.timestamp ||
+        (candidate.timestamp === selected.timestamp && candidate.sequence > selected.sequence))) {
+      selected = candidate;
+    }
+  });
+  // Do not substitute an older link when the newest email has no URL.
+  return selected ? selected.gmailUrl || '' : '';
 }
 
 function getProjectIdSummaryLatestCategories_(email, applicationIds, latest) {
@@ -2094,6 +2175,7 @@ function loadProjectIdSummaryAttachmentCounts_(spreadsheet) {
  * Values remain blank when the comparison row or individual metric is missing.
  */
 function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
+  if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) return new Map();
   const byProjectId = new Map();
   const sheet = spreadsheet.getSheetByName(
     PROJECT_ID_SUMMARY_CONFIG.COMPARISON_SHEET_NAME,
@@ -2349,12 +2431,68 @@ function projectIdSummarySimpleRowsEqual_(leftRows, rightRows) {
   );
 }
 
+function orderProjectIdSummaryBuiltRow_(row) {
+  return PROJECT_ID_SUMMARY_HEADERS.map(header => {
+    if (header === PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER) {
+      return projectIdSummaryEmailDays_(
+        row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf('First Email Received At')],
+        row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf('Last Email Received At')],
+      );
+    }
+    return row[PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf(header)];
+  });
+}
+
+function projectIdSummaryEmailDays_(firstValue, lastValue) {
+  const first = normalizeProjectIdSummaryDate_(firstValue);
+  const last = normalizeProjectIdSummaryDate_(lastValue);
+  if (!first || !last || last.getTime() < first.getTime()) return '';
+  return Math.ceil((last.getTime() - first.getTime()) / 86400000);
+}
+
+function insertProjectIdSummaryEmailDaysColumn_(sheet, currentHeaders) {
+  if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_DAYS)) return;
+  const index = currentHeaders.indexOf('Last Email Received At') + 1;
+  sheet.insertColumnAfter(index);
+  sheet.getRange(1, index + 1).setValue(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER);
+  currentHeaders.splice(index, 0, PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER);
+}
+
+function moveProjectIdSummaryEmailCountColumn_(sheet, currentHeaders) {
+  if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_COUNT_MOVE)) return;
+  const sourceIndex = currentHeaders.indexOf('Email Count');
+  const destinationIndex = currentHeaders.indexOf('Snapshot Date');
+  sheet.moveColumns(sheet.getRange(1, sourceIndex + 1, sheet.getMaxRows(), 1), destinationIndex + 1);
+  currentHeaders.splice(destinationIndex - 1, 0, currentHeaders.splice(sourceIndex, 1)[0]);
+}
+
+function moveProjectIdSummaryDateColumns_(sheet, currentHeaders) {
+  if (!projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS)) return;
+  // Move actual columns so Sheets also updates formulas in dependent tabs.
+  PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_DAYS.forEach((header, targetIndex) => {
+    const sourceIndex = currentHeaders.indexOf(header);
+    if (sourceIndex !== targetIndex) {
+      sheet.moveColumns(sheet.getRange(1, sourceIndex + 1, sheet.getMaxRows(), 1), targetIndex + 1);
+      currentHeaders.splice(targetIndex, 0, currentHeaders.splice(sourceIndex, 1)[0]);
+    }
+  });
+}
+
 function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   let sheet = spreadsheet.getSheetByName(
     PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME,
   );
   if (!sheet) {
     sheet = spreadsheet.insertSheet(PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME);
+  }
+  if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS && sheet.getLastRow() > 0) {
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    // Remove only recognized optional columns, right-to-left, preserving all other data.
+    for (let index = headers.length - 1; index >= 0; index -= 1) {
+      if (PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(String(headers[index]).trim())) {
+        sheet.deleteColumn(index + 1);
+      }
+    }
   }
   if (sheet.getMaxColumns() < PROJECT_ID_SUMMARY_HEADERS.length) {
     sheet.insertColumnsAfter(
@@ -2363,12 +2501,40 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     );
   }
 
-  const currentHeaders = sheet.getLastRow() > 0
+  let currentHeaders = sheet.getLastRow() > 0
     ? sheet
         .getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1))
         .getDisplayValues()[0]
         .map((value) => String(value).trim())
     : [];
+  const compactHeaders = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
+    header => !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
+  );
+  compactHeaders.splice(compactHeaders.indexOf('Gmail Message ID') + 1, 0, 'Gmail URL');
+  compactHeaders.splice(3, 0, 'Aurora Shade Report URL');
+  const beforeAurora = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.filter(header => header !== 'Aurora Shade Report URL');
+  const beforeBothLinks = beforeAurora.filter(header => header !== 'Gmail URL');
+  if (projectIdSummaryHeadersMatch_(currentHeaders, beforeAurora) ||
+      projectIdSummaryHeadersMatch_(currentHeaders, beforeBothLinks)) {
+    sheet.insertColumnAfter(currentHeaders.indexOf('Project URL') + 1);
+    sheet.getRange(1, 4).setValue('Aurora Shade Report URL');
+    currentHeaders.splice(3, 0, 'Aurora Shade Report URL');
+  }
+  const previousHeaders = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.filter(header => header !== 'Gmail URL');
+  if (projectIdSummaryHeadersMatch_(currentHeaders, previousHeaders)) {
+    sheet.insertColumnAfter(previousHeaders.indexOf('Gmail Message ID') + 1);
+    sheet.getRange(1, PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.indexOf('Gmail URL') + 1).setValue('Gmail URL');
+    currentHeaders = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.slice();
+  }
+  moveProjectIdSummaryDateColumns_(sheet, currentHeaders);
+  insertProjectIdSummaryEmailDaysColumn_(sheet, currentHeaders);
+  moveProjectIdSummaryEmailCountColumn_(sheet, currentHeaders);
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS &&
+      projectIdSummaryHeadersMatch_(currentHeaders, compactHeaders)) {
+    migrateProjectIdSummarySchema_(sheet, compactHeaders);
+    currentHeaders = PROJECT_ID_SUMMARY_HEADERS;
+    console.log('Project ID Summary: optional comparison deltas re-enabled.');
+  }
   const hasUnexpectedContent = currentHeaders.some(Boolean) &&
     !projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS) &&
     !projectIdSummaryHeadersMatch_(
@@ -2695,13 +2861,14 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     .setVerticalAlignment('middle')
     .setWrap(true);
   const aiContextStartColumn = PROJECT_ID_SUMMARY_AI_CONTEXT_START_INDEX + 1;
-  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
+  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX + 1;
   const categoryGroupColumn = PROJECT_ID_SUMMARY_CATEGORY_GROUP_INDEX + 1;
   const categoriesColumn = PROJECT_ID_SUMMARY_CATEGORIES_INDEX + 1;
   const toleranceRangeColumn = PROJECT_ID_SUMMARY_TOLERANCE_RANGE_INDEX + 1;
   const statusColumn = PROJECT_ID_SUMMARY_STATUS_INDEX + 1;
   const statusOrderColumn = PROJECT_ID_SUMMARY_STATUS_ORDER_INDEX + 1;
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
   sheet
     .getRange(
       1,
@@ -2711,6 +2878,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_HEADER_BACKGROUND);
   styleProjectIdSummaryAbsoluteDeltaColumns_(sheet, 1, 1, true);
+  }
   const metadataStartColumn = PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1;
   sheet
     .getRange(
@@ -2722,11 +2890,22 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
     .setBackground(
       PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND,
     );
+  PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS.forEach(header => {
+    sheet.getRange(1, projectIdSummaryColumn_(header), 1, 1)
+      .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
+    sheet.setColumnWidth(projectIdSummaryColumn_(header), 180);
+  });
+  sheet.getRange(1, projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER))
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
+  sheet.setColumnWidth(projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER), 200);
+  sheet.getRange(1, projectIdSummaryColumn_('Email Count'))
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_HEADER_BACKGROUND);
   sheet.setFrozenRows(1);
   sheet.setTabColor(PROJECT_ID_SUMMARY_CONFIG.TAB_COLOR);
   sheet.setColumnWidth(projectIdSummaryColumn_('Project ID'), 280);
   sheet.setColumnWidth(projectIdSummaryColumn_('Application ID'), 220);
   sheet.setColumnWidth(projectIdSummaryColumn_('Project URL'), 520);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Aurora Shade Report URL'), 420);
   sheet.setColumnWidth(projectIdSummaryColumn_('Address'), 300);
   sheet.setColumnWidth(projectIdSummaryColumn_('State'), 90);
   sheet.setColumnWidth(projectIdSummaryColumn_('Region'), 120);
@@ -2742,7 +2921,9 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.showColumns(projectIdSummaryColumn_('kWh/kW'), 4);
   sheet.setColumnWidths(projectIdSummaryColumn_('Solar Panel'), 2, 220);
   sheet.setColumnWidths(projectIdSummaryColumn_('Installer'), 2, 180);
-  sheet.setColumnWidths(projectIdSummaryColumn_('Email Count'), 3, 135);
+  ['Email Count', 'Attachment Count', 'Analyzed PDF Count'].forEach(header => {
+    sheet.setColumnWidth(projectIdSummaryColumn_(header), 135);
+  });
   sheet.setColumnWidths(
     projectIdSummaryColumn_('First Email Received At'),
     2,
@@ -2751,17 +2932,18 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   sheet.setColumnWidth(projectIdSummaryColumn_('Map Data Source'), 180);
   sheet.setColumnWidth(projectIdSummaryColumn_('RGB Basemap URL'), 520);
   sheet.setColumnWidth(aiContextStartColumn, 180);
-  sheet.setColumnWidth(aiContextStartColumn + 1, 360);
-  sheet.setColumnWidths(aiContextStartColumn + 2, 2, 520);
-  sheet.setColumnWidth(latestAiStartColumn, 180);
-  sheet.setColumnWidths(latestAiStartColumn + 1, 2, 175);
-  sheet.setColumnWidth(latestAiStartColumn + 3, 165);
-  sheet.setColumnWidth(latestAiStartColumn + 4, 135);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Gmail URL'), 520);
+  sheet.setColumnWidth(projectIdSummaryColumn_('Required Evidence'), 360);
+  sheet.setColumnWidths(projectIdSummaryColumn_('Technical Notes'), 2, 520);
+  sheet.setColumnWidths(latestAiStartColumn, 2, 175);
+  sheet.setColumnWidth(latestAiStartColumn + 2, 165);
+  sheet.setColumnWidth(latestAiStartColumn + 3, 135);
   sheet.setColumnWidth(categoryGroupColumn, 260);
   sheet.setColumnWidth(categoriesColumn, 240);
   sheet.setColumnWidth(toleranceRangeColumn, 190);
   sheet.setColumnWidth(statusColumn, 150);
   sheet.setColumnWidth(statusOrderColumn, 125);
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
   sheet.setColumnWidths(
     deltaStartColumn,
     PROJECT_ID_SUMMARY_DELTA_HEADERS.length,
@@ -2774,6 +2956,7 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
       header === 'Absolute Azimuth + Pitch' ? 190 : 165,
     );
   });
+  }
   sheet.setColumnWidth(metadataStartColumn, 135);
   sheet.setColumnWidths(metadataStartColumn + 1, 4, 180);
   const existingDataRows = Math.max(0, sheet.getLastRow() - 1);
@@ -2800,6 +2983,7 @@ function migrateProjectIdSummarySchema_(sheet, sourceHeaders) {
       const sourceIndex = sourceIndexByHeader.get(header);
       return sourceIndex === undefined ? '' : sourceRow[sourceIndex];
     });
+    if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
     const deltaAzimuth = migratedRow[
       PROJECT_ID_SUMMARY_HEADERS.indexOf('Delta Azimuth')
     ];
@@ -2823,6 +3007,7 @@ function migrateProjectIdSummarySchema_(sheet, sourceHeaders) {
     ] = hasDeltaAzimuth && hasDeltaPitch
       ? absoluteDeltaAzimuth + absoluteDeltaPitch
       : '';
+    }
     migratedRow[
       PROJECT_ID_SUMMARY_HEADERS.indexOf('(Bench-Art)/Art %')
     ] = calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
@@ -2862,6 +3047,7 @@ function styleProjectIdSummaryAbsoluteDeltaColumns_(
   rowCount,
   isHeader,
 ) {
+  if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) return;
   const background = isHeader
     ? PROJECT_ID_SUMMARY_CONFIG.ABSOLUTE_DELTA_HEADER_BACKGROUND
     : PROJECT_ID_SUMMARY_CONFIG.ABSOLUTE_DELTA_DATA_BACKGROUND;
@@ -2925,6 +3111,7 @@ function formatProjectIdSummaryEnergyRows_(sheet, startRow, rowCount) {
     reference_dc_production_kwh: '#,##0.0',
     estimated_annual_ac_production_kwh: '#,##0.0',
     'Annual Energy Consumption kWh': '#,##0',
+    estimated_offset_percent: '#,##0.00',
   };
   PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
     sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
@@ -2949,14 +3136,10 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       .setBackground('#ffffff').setNumberFormat('@').setWrap(true);
   });
   formatProjectIdSummaryEnergyRows_(sheet, startRow, rowCount);
-  sheet
-    .getRange(
-      startRow,
-      projectIdSummaryColumn_('Email Count'),
-      rowCount,
-      3,
-    )
-    .setNumberFormat('#,##0');
+  ['Email Count', 'Attachment Count', 'Analyzed PDF Count'].forEach(header => {
+    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
+      .setNumberFormat('#,##0');
+  });
   sheet
     .getRange(
       startRow,
@@ -2988,32 +3171,29 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
       startRow,
       aiContextStartColumn,
       rowCount,
-      PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length,
+      PROJECT_ID_SUMMARY_AI_CONTEXT_HEADERS.length + 1,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);
 
-  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_START_INDEX + 1;
+  const latestAiStartColumn = PROJECT_ID_SUMMARY_LATEST_AI_NUMERIC_START_INDEX + 1;
   sheet
     .getRange(
       startRow,
       latestAiStartColumn,
       rowCount,
-      PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length,
+      PROJECT_ID_SUMMARY_LATEST_AI_HEADERS.length - 1,
     )
     .setBackground(PROJECT_ID_SUMMARY_CONFIG.LATEST_AI_DATA_BACKGROUND)
     .setWrap(true);
   sheet
-    .getRange(startRow, latestAiStartColumn, rowCount, 1)
-    .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
-  sheet
-    .getRange(startRow, latestAiStartColumn + 1, rowCount, 2)
+    .getRange(startRow, latestAiStartColumn, rowCount, 2)
     .setNumberFormat('0.###');
   sheet
-    .getRange(startRow, latestAiStartColumn + 3, rowCount, 1)
+    .getRange(startRow, latestAiStartColumn + 2, rowCount, 1)
     .setNumberFormat('0.00%');
   sheet
-    .getRange(startRow, latestAiStartColumn + 4, rowCount, 1)
+    .getRange(startRow, latestAiStartColumn + 3, rowCount, 1)
     .setNumberFormat('0.##');
   sheet
     .getRange(
@@ -3042,6 +3222,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     .setHorizontalAlignment('center');
 
   const deltaStartColumn = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
+  if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) {
   sheet
     .getRange(
       startRow,
@@ -3058,6 +3239,7 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
     rowCount,
     false,
   );
+  }
 
   const metadataStartColumn = PROJECT_ID_SUMMARY_POSTHOG_START_INDEX + 1;
   sheet
@@ -3077,6 +3259,17 @@ function formatProjectIdSummaryRows_(sheet, startRow, rowCount) {
   sheet
     .getRange(startRow, metadataStartColumn + 1, rowCount, 4)
     .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT);
+  PROJECT_ID_SUMMARY_TRAILING_DATE_HEADERS.forEach(header => {
+    sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
+      .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
+      .setNumberFormat(PROJECT_ID_SUMMARY_CONFIG.DATE_FORMAT).setWrap(true);
+  });
+  sheet.getRange(startRow, projectIdSummaryColumn_(PROJECT_ID_SUMMARY_EMAIL_DAYS_HEADER), rowCount, 1)
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
+    .setNumberFormat('0').setWrap(true);
+  sheet.getRange(startRow, projectIdSummaryColumn_('Email Count'), rowCount, 1)
+    .setBackground(PROJECT_ID_SUMMARY_CONFIG.PROJECT_METADATA_DATA_BACKGROUND)
+    .setNumberFormat('#,##0').setWrap(true);
 }
 
 function projectIdSummaryHeadersMatch_(currentHeaders, expectedHeaders) {
@@ -3136,6 +3329,20 @@ function rewriteProjectIdSummaryRows_(sheet, rows) {
 }
 
 function setProjectIdSummaryRichLinks_(sheet, rows) {
+  const shadeReportColumn = PROJECT_ID_SUMMARY_HEADERS.indexOf('Aurora Shade Report URL');
+  sheet.getRange(2, shadeReportColumn + 1, rows.length, 1).setRichTextValues(rows.map(row => {
+    const url = safeProjectIdSummaryUrl_(row[shadeReportColumn]);
+    const builder = SpreadsheetApp.newRichTextValue().setText(url);
+    if (url) builder.setLinkUrl(url);
+    return [builder.build()];
+  }));
+  const gmailUrlColumn = PROJECT_ID_SUMMARY_HEADERS.indexOf('Gmail URL');
+  sheet.getRange(2, gmailUrlColumn + 1, rows.length, 1).setRichTextValues(rows.map(row => {
+    const url = safeProjectIdSummaryUrl_(row[gmailUrlColumn]);
+    const builder = SpreadsheetApp.newRichTextValue().setText(url);
+    if (url) builder.setLinkUrl(url);
+    return [builder.build()];
+  }));
   const richUrls = rows.map((row) => {
     const url = String(
       row[PROJECT_ID_SUMMARY_PROJECT_URL_INDEX] || '',

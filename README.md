@@ -18,12 +18,41 @@ No web-app deployment is required.
 
 ## GoodLeap conditional columns
 
+Comparison delta outputs (formerly BA–BU) are disabled in Project ID Summary.
+Refresh removes those columns and does not load their comparison values.
+Engine Version follows Status Order at AX, with project dates at AY–BB.
+The date block continues with Latest AI Email Received At (BC), First Email
+Received At (BD), Last Email Received At (BE), Days Between First and Last Email
+(BF), Email Count (BG), and Snapshot Date (BH). Email Count is moved, not duplicated,
+and uses the green metadata style with integer formatting. Email days are the elapsed timestamp difference
+divided by 24 hours and rounded up. Identical timestamps return zero; missing,
+invalid, or reversed dates remain blank. Each refresh recalculates this integer.
+All eight dates use the green metadata style. Refresh physically migrates the
+previous columns once, then preserves this layout on every update.
+
+Project ID Summary retains Gmail Message ID (AJ), which Category Explorer uses
+for its email join. Gmail URL (AK) is copied from Emails / Google Group URL by
+matching Application ID to Case ID and selecting the greatest Received At.
+For equal timestamps, the later source row wins. A missing URL on the latest
+email remains blank rather than using an older message. The refresh inserts the
+new column without replacing the message identifiers or other project data.
+
+Aurora Shade Report URL (D) matches Project ID to PDF Analysis and copies Source
+PDF URL from the record with the greatest Source Received At, not Analyzed At.
+For equal receipt timestamps, the later source row wins. A missing URL on the
+latest record stays blank. Refresh inserts this column after Project URL while
+preserving existing data and updating header-based formulas and formatting.
+To restore these optional outputs, set
+`PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = true` in ProjectIdSummary.gs,
+save it in Apps Script and refresh the summary. Existing comparison source
+tabs and the original delta definitions remain available for traceability.
+
 Every Project ID Summary refresh orders complete rows by `Created At`, newest
 first. Missing or invalid dates appear last, with Project ID as the deterministic
 tie-breaker. Manual sorting is replaced on the next summary refresh.
 
 Y/Z/AA use live conditional formatting: boolean TRUE has the same light green
-as AX (`#b7e1cd`), FALSE has light red (`#f4cccc`), and blanks stay white.
+as the production tolerance column (`#b7e1cd`), FALSE has light red (`#f4cccc`), and blanks stay white.
 `setupProjectIdSummaryBooleanColors()` installs only these styles, without
 rewriting formulas or data. Each summary refresh maintains the two rules and
 extends their range to the available rows while preserving unrelated rules.
@@ -407,30 +436,41 @@ It:
   checked first; Sales is queried only for projects absent from GoodLeap.
   `Snapshot Date`, `Snapshot Version ID`, `Snapshot Engine Version`, and
   `Energy Calculation Status` identify the source and any missing inputs.
-  These are saved-version estimates, not guaranteed current live-design values.
+  These are current replicated project/pricing estimates, subject to warehouse
+  ingestion latency and the supported V2/V3 no-curve calculation.
   Never sum source `panel_capacity_watts` as
   nominal power. Estimates remain blank when the physical inverter count,
   inverter model, V2/V3 no-curve formula, correction-table range, or adjusted
   consumption cannot be established safely.
-  Active panel count and reference DC are extracted from the same snapshot's
-  `solar_panels` array, selecting `isActive = true` and summing
-  `panelAnnualProdDckwh`. Snapshot pricing, selected models, overrides, engine,
-  and annual consumption are used together. Microinverters use the snapshot's
-  count override when present, otherwise its active panel count. String/other
-  known strategies retain the user-approved one-inverter rule. An override
-  never changes the panel records selected for the DC sum.
-  Pricing models without an ID are resolved by a normalized catalogue model
-  number. A unique match supplies missing power/efficiency. Duplicate matches
+  Current `projects` supplies count, pricing/version selection, overrides,
+  engine and annual consumption. The latest saved design supplies only active
+  panel IDs; live `solarpanels` supplies DC production and curve flags, joined
+  by panel/project/organization ID. Expected, unique and matched active counts
+  must all equal the current project count. Never select a partial panel set by
+  `max(updated_at)` or sum historic batches. Snapshot Date/ID remain provenance
+  for membership, not the timestamps of the current production inputs.
+  Positive integer inverter count overrides apply to micro and string models;
+  otherwise use current panel count for micro and one for string. Overrides
+  never change the selected DC panel set. Explicit model overrides take priority;
+  otherwise require one physical model in the configured system-size range
+  (exclusive minimum, inclusive maximum). Single micro models with 0/0 ranges
+  are unbounded. Ambiguous models stay unresolved.
+  Pricing IDs may differ from catalogue IDs; normalized model number plus
+  nominal AC watts disambiguates same-name power variants. A unique match
+  supplies missing power/efficiency. Duplicate matches
   supply only the inverter type when every record has the same nonempty
   `count_strategy`; conflicting or missing strategies remain unresolved.
   Missing snapshots, incomplete panel production, or unsupported engine/curve
   calculations leave affected estimates blank with a visible reason. Missing
   inverter numeric specifications may use a unique selected-model catalog match;
   that fallback is explicitly recorded in the calculation status. Offset uses the
-  confirmed efficiency-adjusted annual consumption and truncates to an integer.
+  confirmed efficiency-adjusted annual consumption and retains full precision
+  for the 110%/150% comparisons, displaying two decimals. Current-source AC
+  calculations require a verified zero project/org derate; missing/nonzero derate
+  and diurnal curves stay blank pending canonical engine verification.
 - Applies wrapped text to every cell in `Project ID Summary` on setup and every
   refresh, including the header and all currently allocated blank cells.
-- Sorts projects by Email Count and then by the most recent email.
+- Sorts complete project rows by Created At descending, with missing dates last.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
   workflows without adding another trigger. PostHog map lookups run only from
   the manual Project ID Summary refresh and the existing PostHog workflows.
@@ -442,20 +482,24 @@ Primary functions:
 3. `previewProjectIdSummary()`
 4. `setupProjectIdSummary()`
 5. `refreshProjectIdSummary()`
-6. `validateArtemisSnapshotEnergyExamples()` (read-only source validation before
-   publishing the migrated sheet)
+6. `validateCurrentProjectEnergyExamples()` (read-only nine-project pilot, including Sales, before
+   publishing current energy values)
 
 For this energy-metric upgrade, install both `ProjectIdSummary.gs` and the new
 `EnergyProductionMetrics.gs` in the same Apps Script project. Run
-`validateArtemisSnapshotEnergyExamples()` first, then `refreshProjectIdSummary()`
-and `setupCategoryExplorer()` to migrate the summary and update the explorer's
-header-based references. No trigger reinstallation is required. Unsupported
-engine/curve combinations or missing catalog inputs leave estimates blank.
-The older validation function names delegate to the snapshot examples. The
-20-panel Sales snapshot reproduces 8.6 kW, 11,995.003 kWh AC and 142%.
-The nine-panel GoodLeap snapshot gives 3.87 kW, 4,022.389 kWh AC and 68%;
-it predates the live screen showing 3,970 kWh and 67% and must not be presented
-as a live match. No fallback to raw replicated SolarPanels is performed.
+`validateCurrentProjectEnergyExamples()` first, then `refreshProjectIdSummary()`.
+No schema or trigger reinstallation is required. Unsupported engine/curve
+combinations or missing catalog inputs leave estimates blank. The older snapshot
+validator names are compatibility aliases for the new current-source pilot.
+Energy queries use five-project batches independently of the larger map/metadata
+batches. Project/pricing, latest membership (`argMax` by date/ID), and live-panel
+values are read separately and matched by exact project/organization/panel keys
+inside Apps Script, avoiding repeated warehouse joins within the API time budget.
+Failed batches retry each project in the same source. Any remaining query failure
+aborts publication rather than replacing the summary with a partially failed read.
+Catalogue lookups are reused within a single refresh/source, never across refreshes.
+The verified current pilot `d2d4ad7b-0b27-4dbc-a315-86511e7f0835` reproduces 11
+panels, 4.73 kW, SolarEdge 3800 W/99.2%, 4794.0046 kWh AC and 25.7161% offset.
 
 ### `OpenAIPdfExtraction.gs`
 
@@ -1240,6 +1284,9 @@ save the updated `OpenAIAnalysis.gs` in the same Apps Script project, then:
    batch size per run, updates the full analysis of each project's latest
    already analyzed email, and skips successfully versioned rows on reruns.
    If it logs errors, resolve them and rerun; failed rows remain unchanged.
+   When no pending rows or errors remain, it automatically publishes the
+   summary using cached energy/map metadata and refreshes the AI dashboard.
+   This classification-only publication does not requery snapshot energy data.
 5. Run `refreshProjectIdSummary()` to publish the latest email's categories,
    AI Summary, Required Evidence, and Technical Notes. Run
    `refreshAIAnalysisDashboard()` to update category-based charts and counts.
@@ -1252,12 +1299,23 @@ categories. It removes quoted prior replies, including split-line `On ...
 wrote:` headers, before sending the latest message to OpenAI. This prevents a
 previous production or equipment rejection from becoming a current topic when
 the newest reply only asks for a finalized layout and missing documentation.
-`Category Rules Version` is `2026-09-25-production-tolerance-v3`, so earlier analyses
+`Category Rules Version` is `2026-10-06-scoped-rejection-v5`, so earlier analyses
 are eligible for the bounded reclassification even if a previous rules
 revision was already run. Check representative Project ID Summary rows after
 the refresh: an explicit missing-document request must contain Documentation;
-a within-tolerance or approved production statement alone must not produce
-Production, while an outside-tolerance statement must retain it; routine
+a within-tolerance or approved production statement must not produce
+Production. Production requires an explicit yield/benchmark issue and numeric
+tolerance strictly below -5% or above +15%; both endpoints are within range.
+Missing numeric tolerance never becomes zero and flags a stated production
+issue for human review. The category evidence block starts at `Hello Team`
+and ends before `Proposed Production` (or `For additional reference`/reminders
+when the production marker is absent). Full email text remains available for
+numeric extraction. Every AI-selected named category requires an exact quote
+from this block; evidence is internal and does not change the sheet schema.
+Offset reminders, generic uploads, and conditional re-review instructions are
+not category evidence. Documentation and Communication / Follow-up require
+specific unresolved requirements, not submitted documents or routine boilerplate;
+routine
 greetings and reply footers must not create Communication /
 Follow-up. AI classifications still require human review for ambiguous emails.
 
@@ -1850,3 +1908,28 @@ currently holds the shared Apps Script lock. The next scheduled run will retry.
 - [PostHog Personal API keys](https://posthog.com/docs/api/personal-api-keys)
 - [Google Apps Script Properties Service](https://developers.google.com/apps-script/guides/properties)
 - [Google Apps Script installable triggers](https://developers.google.com/apps-script/guides/triggers/installable)
+
+
+## Sun Hours rejection evidence (2026-10-07)
+
+Category rules version `2026-10-07-sun-hours-evidence-v6` assigns Sun Hours
+only for explicit insufficient solar-exposure hours, an unmet sun-hour
+requirement, or a required correction to an hours value. Recognized spellings
+include sunhours, sun hours, sun-hours, sun-hour, sunlight hours, and
+solar-exposure hours. A measurement or generic minimum alone does not qualify.
+Trees, shading, low production, irradiance, solar access and TSRF do not imply
+Sun Hours. Both Shading / Site Conditions and Sun Hours may be assigned when
+each has its own evidence. Resolved, approved, conditional and footer reminders
+are excluded. AI Summary and Technical Notes must agree with the newest
+substantive rejection email, which is the authoritative source. The structured
+response includes a verbatim `category_evidence` quote; the deterministic
+validator supplies the exact source sentence when the model omits a qualifying
+Sun Hours category.
+
+For an existing installation, save OpenAIAnalysis.gs in the same Apps Script
+project and run `reclassifyLatestProjectEmailsWithOpenAI()` until
+`pendingAfterRun` is zero. Each batch updates the newest analyzed email per
+project; older emails retain their historical results. Version markers make
+this resumable. The final successful batch publishes Project ID Summary and
+refreshes AI Dashboard without extra energy/map queries. No web-app deployment
+is required; existing triggers use the saved script.
