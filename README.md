@@ -1908,3 +1908,28 @@ currently holds the shared Apps Script lock. The next scheduled run will retry.
 - [PostHog Personal API keys](https://posthog.com/docs/api/personal-api-keys)
 - [Google Apps Script Properties Service](https://developers.google.com/apps-script/guides/properties)
 - [Google Apps Script installable triggers](https://developers.google.com/apps-script/guides/triggers/installable)
+
+
+## Sun Hours rejection evidence (2026-10-07)
+
+Category rules version `2026-10-07-sun-hours-evidence-v6` assigns Sun Hours
+only for explicit insufficient solar-exposure hours, an unmet sun-hour
+requirement, or a required correction to an hours value. Recognized spellings
+include sunhours, sun hours, sun-hours, sun-hour, sunlight hours, and
+solar-exposure hours. A measurement or generic minimum alone does not qualify.
+Trees, shading, low production, irradiance, solar access and TSRF do not imply
+Sun Hours. Both Shading / Site Conditions and Sun Hours may be assigned when
+each has its own evidence. Resolved, approved, conditional and footer reminders
+are excluded. AI Summary and Technical Notes must agree with the newest
+substantive rejection email, which is the authoritative source. The structured
+response includes a verbatim `category_evidence` quote; the deterministic
+validator supplies the exact source sentence when the model omits a qualifying
+Sun Hours category.
+
+For an existing installation, save OpenAIAnalysis.gs in the same Apps Script
+project and run `reclassifyLatestProjectEmailsWithOpenAI()` until
+`pendingAfterRun` is zero. Each batch updates the newest analyzed email per
+project; older emails retain their historical results. Version markers make
+this resumable. The final successful batch publishes Project ID Summary and
+refreshes AI Dashboard without extra energy/map queries. No web-app deployment
+is required; existing triggers use the saved script.

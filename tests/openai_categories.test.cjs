@@ -142,10 +142,10 @@ test('split-line quoted replies cannot bring old issues into newest message', ()
   assert.deepEqual(Array.from(analysis.categories), ['Documentation']);
 });
 
-test('Sun Hours stays a topic and categories use only the latest message', () => {
+test('Sun Hours requires a correction and categories use only the latest message', () => {
   const analysis = {primary_category: 'Other', categories: ['Other']};
   context.applyOpenAICategoryEvidenceRules_(
-    analysis, 'Please review the sunhours calculation.',
+    analysis, 'The sunhours calculation is incorrect and must be corrected.',
   );
   assert.deepEqual(Array.from(analysis.categories), ['Sun Hours']);
 
@@ -178,7 +178,7 @@ test('new analysis rows carry category rules version', () => {
     analysis, 'test-model', 'response-1', 'Analyzed', '',
   );
   assert.equal(row.length, 26);
-  assert.equal(row[25], '2026-10-06-scoped-rejection-v5');
+  assert.equal(row[25], '2026-10-07-sun-hours-evidence-v6');
 });
 
 const footer = '\nFor additional reference, please review the shade report available in Origin.\n' +
@@ -402,7 +402,45 @@ test('historical reclassification updates only the latest email and is resumable
   assert.equal(first.dashboard.updated, true);
   assert.equal(rows[1][8], 'Production');
   assert.equal(rows[2][8], 'Documentation');
-  assert.equal(rows[2][25], '2026-10-06-scoped-rejection-v5');
+  assert.equal(rows[2][25], '2026-10-07-sun-hours-evidence-v6');
   const second = context.reclassifyLatestProjectEmailsWithOpenAI();
   assert.equal(second.selectedMessages, 0);
+});
+
+
+test('Sun Hours requires an unresolved hours issue and keeps exact evidence', () => {
+  for (const text of [
+    'Shading does not meet the stated sun-hour requirement',
+    'Sun hours are insufficient',
+    'Increase minimum sunlight hours because the current value is too low',
+    'The solar-exposure-hours value must be corrected',
+  ]) {
+    const analysis = {primary_category: 'Other', categories: ['Other']};
+    context.applyOpenAICategoryEvidenceRules_(analysis, text);
+    assert.ok(analysis.categories.includes('Sun Hours'), text);
+    assert.ok(analysis.category_evidence.some(e => e.category === 'Sun Hours' && text.includes(e.quote)));
+  }
+  for (const text of [
+    'This pre-check is outside tolerance at -21.89%. The design must be updated to the 12,477 kWh benchmark and revised for onsite tree/shading conditions.',
+    'Sun hours: 4.5. Minimum requirement: 4.',
+    'Please ensure minimum sun hours',
+    'The design meets the minimum sun hours',
+    'If sun hours are below minimum, update the design',
+    'Shading, solar access, TSRF and irradiance require review',
+  ]) {
+    assert.equal(context.hasExplicitOpenAISunHoursNeed_(text), false, text);
+  }
+});
+
+
+test('the two reported projects have Sun Hours evidence in their original email', () => {
+  for (const source of [
+    'Production - Due to shading issues the design does not meet our minimum 1,050 kW sunhours',
+    'Update your shading to reflect the onsite conditions in the recently dated imagery and adjust design to meet min/max sun hour requirement',
+  ]) assert.equal(context.hasExplicitOpenAISunHoursNeed_(source), true);
+  const source = 'Revise the onsite tree and shading conditions';
+  const analysis = {primary_category: 'Sun Hours', categories: ['Sun Hours'],
+    category_evidence: [{category: 'Sun Hours', quote: source}]};
+  context.applyOpenAICategoryEvidenceRules_(analysis, source);
+  assert.deepEqual(Array.from(analysis.categories), ['Other']);
 });

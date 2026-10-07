@@ -27,7 +27,7 @@ const OPENAI_ANALYSIS_CONFIG = {
   MAX_BATCH_SIZE: 20,
   DEFAULT_MAX_EMAIL_CHARACTERS: 30000,
   MAX_OUTPUT_TOKENS: 2200,
-  CATEGORY_RULES_VERSION: '2026-10-06-scoped-rejection-v5',
+  CATEGORY_RULES_VERSION: '2026-10-07-sun-hours-evidence-v6',
 };
 
 const OPENAI_ANALYSIS_PROPERTY_KEYS = {
@@ -122,7 +122,8 @@ const OPENAI_ANALYSIS_INSTRUCTIONS = [
   'Documentation: a specific missing, invalid, unsigned, insufficient or explicitly requested document, form, photograph or evidence that is an actual blocker in the category block. Do not select it merely because documents were submitted, a design must be updated, or a template says upload a revised screenshot, sync the portal, or review a shade report. A project-specific signed Offset Acknowledgement requirement in Steps to Clear does qualify.',
   'Offset: an explicit project-specific offset violation or pending offset correction/acknowledgment in the category block. A generic reminder to keep offset below 110% or 150%, especially after For additional reference, never qualifies.',
   'Communication / Follow-up: an explicit project-specific unresolved status inquiry, clarification, identification problem, review request, ticket merge or coordination blocker in the category block. Do not add it for a greeting, acknowledgment, standard please-reply footer, generic re-review instruction, or the ordinary steps to upload evidence or update a design.',
-  'Sun Hours: an explicit sunhours, sun hours, sun-hours, or equivalent solar-exposure-hours measurement, requirement, or discussion. Do not infer it from unrelated production, shade-report links, or generic shading discussion.',
+  'Sun Hours: ONLY an explicit unresolved failure of a sun-hour requirement, insufficient sun hours, or a required correction to sun-hour values. Recognize sunhours, sun hours, sun-hours, sun-hour requirement, minimum sunlight hours and solar-exposure hours. A measurement or a generic minimum requirement alone is insufficient. Never infer Sun Hours solely from trees, shading, low production, irradiance, solar access, TSRF or a shade-report link. Shading / Site Conditions and Sun Hours may coexist only when each is explicitly supported. AI Summary and Technical Notes must consistently reflect the original category evidence block; neither generated text nor an earlier email can invent a sun-hour failure. Return an exact source quote in category_evidence for Sun Hours; omit it when no explicit evidence exists.',
+  'Sun Hours examples: shading does not meet the stated sun-hour requirement qualifies. Revise onsite tree/shading conditions with no explicit hours issue does not qualify. The design meets the minimum sun hours does not qualify. A footer saying ensure minimum sun hours does not qualify.',
   'Other: only when none of the named categories is supported by the newest body. Never combine Other with a named category.',
   'Examples: "production is within tolerance; required installation photos are missing" is Documentation only. "Production validation was approved at 10,354 kWh versus a 10,352 kWh benchmark" is not Production. "Production is outside tolerance; panel counts by azimuth differ" with Tolerance: -28.22% is Production and Layout. "Production - Offset exceeds 110%; upload a signed Offset Acknowledgement" with Tolerance: 1.45% is Offset and Documentation, not Production or Communication / Follow-up. Offset mentioned only in the footer produces no Offset category.',
   'Rejection reasons must describe the concrete issue stated in the email.',
@@ -1189,7 +1190,11 @@ function applyOpenAICategoryEvidenceRules_(analysis, cleanedBody, fallbackTolera
   if (
     hasExplicitOpenAISunHoursNeed_(block) &&
     !analysis.categories.includes('Sun Hours')
-  ) analysis.categories.push('Sun Hours');
+  ) {
+    analysis.categories.push('Sun Hours');
+    if (!Array.isArray(analysis.category_evidence)) analysis.category_evidence = [];
+    analysis.category_evidence.push({category: 'Sun Hours', quote: openAISunHoursEvidence_(block)});
+  }
   if (
     hasExplicitOpenAIDocumentationNeed_(block) &&
     !analysis.categories.includes('Documentation')
@@ -1266,18 +1271,25 @@ function hasExplicitOpenAIOffsetNeed_(value) {
     /\b(?:reduce|correct|update|lower)\b[^.!?\n]{0,80}\boffset\b/i.test(text);
 }
 
+function openAISunHoursEvidence_(value) {
+  const sentences = String(value || '').split(/[\n.!?]+/);
+  for (const sentence of sentences) {
+    const text = sentence.trim();
+    if (!containsOpenAISunHours_(text)) continue;
+    // Generic, conditional and resolved reminders are not rejection evidence.
+    if (/\b(?:if|reminder|please ensure|already corrected|resolved|approved)\b/i.test(text)) continue;
+    if (!/\b(?:does not meet|do not meet|doesn't meet|not meeting|fails? to meet)\b/i.test(text) && /\b(?:meets?|satisfies?|complies with)\s+(?:the\s+|our\s+|stated\s+|required\s+|minimum\s+){0,4}(?:sun[\s-]*hours?|sunlight hours?|solar[\s-]*exposure[\s-]*hours?)/i.test(text)) continue;
+    if (/\b(?:does not meet|do not meet|doesn't meet|not meeting|fails? to meet|failed|insufficient|below|less than|too low|incorrect|missing|not satisfied|not met|unmet|must|need to|required to|recheck|adjust|correct|revise|update|increase)\b/i.test(text)) return text;
+  }
+  return '';
+}
+
 function hasExplicitOpenAISunHoursNeed_(value) {
-  const text = String(value || '');
-  if (/\n/.test(text)) return text.split(/\n+/).some(hasExplicitOpenAISunHoursNeed_);
-  return containsOpenAISunHours_(text) &&
-    /\b(?:minimum|requirement|does not meet|failed|incorrect|missing|review|recheck|adjust|correct)\b/i.test(text) &&
-    !/\b(?:if|approved|meets (?:the |our )?minimum)\b/i.test(text);
+  return Boolean(openAISunHoursEvidence_(value));
 }
 
 function containsOpenAISunHours_(value) {
-  return /(^|[^a-z0-9])sun[\s-]*hours?(?=$|[^a-z0-9])/i.test(
-    String(value || ''),
-  );
+  return /(^|[^a-z0-9])(?:sun[\s-]*hours?|sunlight[\s-]+hours?|solar[\s-]*exposure[\s-]*hours?)(?=$|[^a-z0-9])/i.test(String(value || ''));
 }
 
 function loadOpenAIEmailBody_(candidate) {
