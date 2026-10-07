@@ -436,30 +436,41 @@ It:
   checked first; Sales is queried only for projects absent from GoodLeap.
   `Snapshot Date`, `Snapshot Version ID`, `Snapshot Engine Version`, and
   `Energy Calculation Status` identify the source and any missing inputs.
-  These are saved-version estimates, not guaranteed current live-design values.
+  These are current replicated project/pricing estimates, subject to warehouse
+  ingestion latency and the supported V2/V3 no-curve calculation.
   Never sum source `panel_capacity_watts` as
   nominal power. Estimates remain blank when the physical inverter count,
   inverter model, V2/V3 no-curve formula, correction-table range, or adjusted
   consumption cannot be established safely.
-  Active panel count and reference DC are extracted from the same snapshot's
-  `solar_panels` array, selecting `isActive = true` and summing
-  `panelAnnualProdDckwh`. Snapshot pricing, selected models, overrides, engine,
-  and annual consumption are used together. Microinverters use the snapshot's
-  count override when present, otherwise its active panel count. String/other
-  known strategies retain the user-approved one-inverter rule. An override
-  never changes the panel records selected for the DC sum.
-  Pricing models without an ID are resolved by a normalized catalogue model
-  number. A unique match supplies missing power/efficiency. Duplicate matches
+  Current `projects` supplies count, pricing/version selection, overrides,
+  engine and annual consumption. The latest saved design supplies only active
+  panel IDs; live `solarpanels` supplies DC production and curve flags, joined
+  by panel/project/organization ID. Expected, unique and matched active counts
+  must all equal the current project count. Never select a partial panel set by
+  `max(updated_at)` or sum historic batches. Snapshot Date/ID remain provenance
+  for membership, not the timestamps of the current production inputs.
+  Positive integer inverter count overrides apply to micro and string models;
+  otherwise use current panel count for micro and one for string. Overrides
+  never change the selected DC panel set. Explicit model overrides take priority;
+  otherwise require one physical model in the configured system-size range
+  (exclusive minimum, inclusive maximum). Single micro models with 0/0 ranges
+  are unbounded. Ambiguous models stay unresolved.
+  Pricing IDs may differ from catalogue IDs; normalized model number plus
+  nominal AC watts disambiguates same-name power variants. A unique match
+  supplies missing power/efficiency. Duplicate matches
   supply only the inverter type when every record has the same nonempty
   `count_strategy`; conflicting or missing strategies remain unresolved.
   Missing snapshots, incomplete panel production, or unsupported engine/curve
   calculations leave affected estimates blank with a visible reason. Missing
   inverter numeric specifications may use a unique selected-model catalog match;
   that fallback is explicitly recorded in the calculation status. Offset uses the
-  confirmed efficiency-adjusted annual consumption and truncates to an integer.
+  confirmed efficiency-adjusted annual consumption and retains full precision
+  for the 110%/150% comparisons, displaying two decimals. Current-source AC
+  calculations require a verified zero project/org derate; missing/nonzero derate
+  and diurnal curves stay blank pending canonical engine verification.
 - Applies wrapped text to every cell in `Project ID Summary` on setup and every
   refresh, including the header and all currently allocated blank cells.
-- Sorts projects by Email Count and then by the most recent email.
+- Sorts complete project rows by Created At descending, with missing dates last.
 - Refreshes safely after email-analysis, PDF-analysis, and PostHog project-sync
   workflows without adding another trigger. PostHog map lookups run only from
   the manual Project ID Summary refresh and the existing PostHog workflows.
@@ -471,20 +482,24 @@ Primary functions:
 3. `previewProjectIdSummary()`
 4. `setupProjectIdSummary()`
 5. `refreshProjectIdSummary()`
-6. `validateArtemisSnapshotEnergyExamples()` (read-only source validation before
-   publishing the migrated sheet)
+6. `validateCurrentProjectEnergyExamples()` (read-only nine-project pilot, including Sales, before
+   publishing current energy values)
 
 For this energy-metric upgrade, install both `ProjectIdSummary.gs` and the new
 `EnergyProductionMetrics.gs` in the same Apps Script project. Run
-`validateArtemisSnapshotEnergyExamples()` first, then `refreshProjectIdSummary()`
-and `setupCategoryExplorer()` to migrate the summary and update the explorer's
-header-based references. No trigger reinstallation is required. Unsupported
-engine/curve combinations or missing catalog inputs leave estimates blank.
-The older validation function names delegate to the snapshot examples. The
-20-panel Sales snapshot reproduces 8.6 kW, 11,995.003 kWh AC and 142%.
-The nine-panel GoodLeap snapshot gives 3.87 kW, 4,022.389 kWh AC and 68%;
-it predates the live screen showing 3,970 kWh and 67% and must not be presented
-as a live match. No fallback to raw replicated SolarPanels is performed.
+`validateCurrentProjectEnergyExamples()` first, then `refreshProjectIdSummary()`.
+No schema or trigger reinstallation is required. Unsupported engine/curve
+combinations or missing catalog inputs leave estimates blank. The older snapshot
+validator names are compatibility aliases for the new current-source pilot.
+Energy queries use five-project batches independently of the larger map/metadata
+batches. Project/pricing, latest membership (`argMax` by date/ID), and live-panel
+values are read separately and matched by exact project/organization/panel keys
+inside Apps Script, avoiding repeated warehouse joins within the API time budget.
+Failed batches retry each project in the same source. Any remaining query failure
+aborts publication rather than replacing the summary with a partially failed read.
+Catalogue lookups are reused within a single refresh/source, never across refreshes.
+The verified current pilot `d2d4ad7b-0b27-4dbc-a315-86511e7f0835` reproduces 11
+panels, 4.73 kW, SolarEdge 3800 W/99.2%, 4794.0046 kWh AC and 25.7161% offset.
 
 ### `OpenAIPdfExtraction.gs`
 

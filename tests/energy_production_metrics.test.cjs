@@ -129,15 +129,20 @@ for(const h of ['Snapshot Version ID','Energy Calculation Status','AI Summary','
 context.postHogStringLiteral_ = (value) => `'${value}'`;
 const query = context.buildProjectIdSummaryEnergyQuery_(
   ['f8c08b92-ce68-453b-9353-210e41c2d149'], 'goodleap_postgres_projects');
-assert.match(query, /goodleap_postgres_projectversions/);
-assert.match(query, /PARTITION BY project_id, organization_id/);
-assert.match(query, /ORDER BY created_at DESC, id DESC/);
-assert.match(query, /v.organization_id = p.organization_id/);
-assert.match(query, /pv.id = v.pricing_version_id/);
-assert.match(query, /v.inverter_type_id/);
-assert.match(query, /panelAnnualProdDckwh/);
-assert.match(query, /'null', '\[\]'/);
+assert.match(query, /FROM goodleap_postgres_projects AS p/);
+assert.match(query, /pv.id = p.pricing_version_id/);
+assert.match(query, /p.inverter_type_id/);
+assert.ok(!query.includes('projectversions'));
 assert.ok(!query.includes('solarpanels'));
+const membershipQuery = context.buildProjectEnergyMembershipQuery_(['id'], 'goodleap_postgres_projects', ['org']);
+assert.match(membershipQuery, /goodleap_postgres_projectversions/);
+assert.match(membershipQuery, /argMax\(tuple\(id, created_at/);
+assert.match(membershipQuery, /tuple\(created_at, id\)/);
+const panelsQuery = context.buildProjectEnergyLivePanelsQuery_(['id'], 'goodleap_postgres_projects', ['org'], ['panel']);
+assert.match(panelsQuery, /goodleap_postgres_solarpanels/);
+assert.match(panelsQuery, /panel_annual_prod_dckwh/);
+assert.match(panelsQuery, /organization_id IN/);
+assert.match(panelsQuery, /AND id IN/);
 assert.ok(!query.includes('panel_capacity_watts'));
 const selected = {model: {model: 'EXAMPLE (11500 W)'}};
 const catalog = [{id:'one', model_number:'EXAMPLE', count_strategy:'string'},
@@ -151,6 +156,8 @@ context.getPostHogSolarSettings_ = () => ({
 });
 context.chunkPostHogArray_ = (items) => [items];
 const id = 'f8c08b92-ce68-453b-9353-210e41c2d149';
+context.readProjectEnergySourceRows_ = (ids, table, name) => context.executePostHogHogQL_(
+  context.buildProjectIdSummaryEnergyQuery_(ids, table), name);
 let calls = [];
 context.executePostHogHogQL_ = (sql) => {
   calls.push(sql);
@@ -166,10 +173,9 @@ context.executePostHogHogQL_ = (sql) => {
     example.referenceDcProductionKwh,example.selectedInverterJson,9,0,5902,'2',0]]};
 };
 assert.equal(context.fetchProjectIdSummaryEnergyMetrics_([id]).get(id).estimatedOffsetPercent,68);
-assert.ok(calls.some((sql) => sql.includes('artemis_sales_postgres_projectversions')));
+assert.ok(calls.some((sql) => sql.includes('artemis_sales_postgres_projects')));
 calls = [];
 context.executePostHogHogQL_ = (sql) => {calls.push(sql);throw Error('test failure');};
-assert.match(context.fetchProjectIdSummaryEnergyMetrics_([id]).get(id)
-  .energyCalculationStatus,/query failed/);
+assert.throws(() => context.fetchProjectIdSummaryEnergyMetrics_([id]),/query failed/);
 assert.equal(calls.length,1);
 console.log('Snapshot energy metric tests passed.');

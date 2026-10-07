@@ -3111,6 +3111,7 @@ function formatProjectIdSummaryEnergyRows_(sheet, startRow, rowCount) {
     reference_dc_production_kwh: '#,##0.0',
     estimated_annual_ac_production_kwh: '#,##0.0',
     'Annual Energy Consumption kWh': '#,##0',
+    estimated_offset_percent: '#,##0.00',
   };
   PROJECT_ID_SUMMARY_ENERGY_HEADERS.forEach((header) => {
     sheet.getRange(startRow, projectIdSummaryColumn_(header), rowCount, 1)
