@@ -170,12 +170,12 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   WEEKLY_MATRIX_TITLE: 'Weekly Category Matrix',
   WEEKLY_MATRIX_START_COLUMN: 8,
   WEEKLY_CHART_MATRIX_TITLE: 'Weekly Categorized Emails Received: Production vs Other Issues',
-  PRODUCTION_PROJECTS_MATRIX_TITLE: 'Weekly Production Projects',
+  PRODUCTION_PROJECTS_MATRIX_TITLE: 'Weekly Created vs Rejected Projects',
   UPDATED_PRODUCTION_PROJECTS_MATRIX_TITLE:
     'Weekly Production Updated Projects',
   PROJECT_CREATION_MATRIX_TITLE: 'Weekly Project Creation',
   PROJECT_CREATION_CHART_MATRIX_TITLE:
-    'Weekly Production Projects Chart Source',
+    'Weekly Created vs Rejected Projects Chart Source',
   PROJECT_CREATION_FIRST_WEEK: '2026-08-17',
   PROJECT_CREATION_QUERY_LIMIT: 10000,
   PROJECTS_CREATED_LABEL: 'Projects Created',
@@ -1525,8 +1525,45 @@ function renameWeeklyReceivedEmailsChartForSpreadsheet_(spreadsheet) {
   return result;
 }
 
+/** Rename the created/rejected comparison without rewriting values or ranges. */
+function renameWeeklyCreatedVsRejectedProjects() {
+  const result = renameWeeklyCreatedVsRejectedProjectsForSpreadsheet_(getOrCreateResources_().spreadsheet);
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+function renameWeeklyCreatedVsRejectedProjectsForSpreadsheet_(spreadsheet) {
+  const replacements = new Map([
+    ['Weekly Production Projects', AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE],
+    ['Weekly Production Projects Chart Source', AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_CHART_MATRIX_TITLE],
+  ]);
+  const result = {title: AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE,
+    renamedCells: 0, renamedCharts: 0};
+  [AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME, AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME]
+    .forEach(name => {
+      const sheet = spreadsheet.getSheetByName(name);
+      if (!sheet) return;
+      replacements.forEach((title, previous) => {
+        sheet.createTextFinder(previous).matchEntireCell(true).findAll().forEach(cell => {
+          cell.setValue(title);
+          result.renamedCells += 1;
+        });
+      });
+      sheet.getCharts().forEach(chart => {
+        const replacement = replacements.get(chart.getOptions().get('title'));
+        if (replacement) {
+          sheet.updateChart(chart.modify().setOption('title', replacement).build());
+          result.renamedCharts += 1;
+        }
+      });
+    });
+  SpreadsheetApp.flush();
+  return result;
+}
+
 function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
   renameWeeklyReceivedEmailsChartForSpreadsheet_(spreadsheet);
+  renameWeeklyCreatedVsRejectedProjectsForSpreadsheet_(spreadsheet);
   let sheet = spreadsheet.getSheetByName(
     AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME,
   );

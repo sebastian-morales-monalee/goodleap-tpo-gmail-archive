@@ -304,7 +304,7 @@ It:
   multi-value `Categories` cell contains the exact Production category, or
   under `Other Categories without Production` otherwise. New and custom
   non-Production categories are included automatically.
-- Adds `Weekly Production Projects` from `Project ID Summary`, locating
+- Adds `Weekly Created vs Rejected Projects` from `Project ID Summary`, locating
   `Created At` and `Is tolerance into the range [-5%, +15%]` by header. Each
   unique project with a valid creation date is counted once by week as
   `Production Inside the Range`, `Production Outside the Range`, or `Without
@@ -318,7 +318,7 @@ It:
   August 17, 2026; earlier archive weeks have no creation comparator. A
   current Application ID can be assigned after project creation, so historical
   creation-week counts may change when one is added later.
-- Extends `Weekly Production Projects` with `Projects Created` and charts two
+- Extends `Weekly Created vs Rejected Projects` with `Projects Created` and charts two
   adjacent bars per week from August 17 onward: the existing three-color
   rejected-project stack and a separate blue GoodLeap creation count. The
   rejected-project stack uses the left vertical axis; `Projects Created` uses
@@ -1143,11 +1143,11 @@ No new Script Property or trigger is required.
    weekly creation counts. The preview reads PostHog but does not write Sheets.
 6. Run `setupAIAnalysisDashboard()` once. Confirm that `AI Weekly Summary`
    contains every historical week in long and wide formats, including the
-   Production-versus-other, `Weekly Production Projects`, `Weekly Production
+   Production-versus-other, `Weekly Created vs Rejected Projects`, `Weekly Production
    Updated Projects`, and `Weekly Project Creation` matrices. Confirm that
    `AI Dashboard` contains the all-time chart, the weekly email and
    updated-project charts, and two adjacent bars per week from August 17 in
-   `Weekly Production Projects`. The detailed weekly tables and charts remain
+   `Weekly Created vs Rejected Projects`. The detailed weekly tables and charts remain
    disabled by default. To restore them, set
    `SHOW_WEEKLY_PRIMARY_CATEGORY_DETAILS` to `true` and rerun the setup.
 7. Optionally delete the manually created `Temporal` sheet after validation;
