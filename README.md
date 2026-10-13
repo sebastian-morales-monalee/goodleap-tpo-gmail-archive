@@ -64,10 +64,10 @@ System kW is black, normal text without underline or hyperlink styling. Stored
 values retain full precision. `setupProjectIdSummaryEnergyFormatting()` reapplies
 these styles to existing rows without fetching or rewriting data.
 
-`AI Dashboard` includes a native `GoodLeap Project Conditions` column chart,
+`AI Dashboard` includes a native `GoodLeap Projects Offset & Ratio Conditions` column chart,
 in this order: Total Projects, kWh/kW ≥ MIN AND Offset ≤ 110%, Projects with
 Missing Data, and kWh/kW ≥ MIN AND 110% < Offset ≤ 150%. Its formula-backed
-table is at AT36:AU40. A populated Project ID defines a project row; any blank
+table is at `AI Weekly Summary!AV2:AW6`. A populated Project ID defines a project row; any blank
 Y/Z/AA boolean makes that project incomplete, but FALSE does not. Total is a
 reference and the four bars are not an additive partition. Run
 `setupGoodLeapConditionsChart()` after installing `AIAnalysisDashboard.gs`;
@@ -1949,3 +1949,14 @@ Every successful Project ID Summary refresh republishes these counts, even if
 project rows are unchanged. Dashboard refresh does the same. The standalone
 `refreshCurrentProjectCategories()` reads the whole existing summary and republishes
 only this table/chart, without new AI requests or warehouse queries.
+
+### Offset and ratio conditions
+
+`GoodLeap Projects Offset & Ratio Conditions` reads the formula table at
+`AI Weekly Summary!AV2:AW6`. Its four formulas reference Project ID Summary
+by header and cover all allocated source rows, including filtered rows.
+Counts retain the same ratio/offset rules and missing-data definition.
+The old `AI Dashboard!AT36:AU43` managed table is removed after reconnecting
+the chart. The chart's position, styles and other dashboard charts are preserved.
+`setupGoodLeapConditionsChart()` publishes this table/chart without PostHog
+or AI calls; regular dashboard refresh also restores it after weekly rebuilds.

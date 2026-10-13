@@ -19,7 +19,9 @@
  * automatic analysis check. The existing five-minute trigger is sufficient.
  */
 
-const GOODLEAP_CONDITIONS_CHART_TITLE = 'GoodLeap Project Conditions';
+const GOODLEAP_CONDITIONS_CHART_TITLE = 'GoodLeap Projects Offset & Ratio Conditions';
+const GOODLEAP_CONDITIONS_PREVIOUS_TITLE = 'GoodLeap Project Conditions';
+const GOODLEAP_CONDITIONS_TABLE_COLUMN = 48; // AV:AW, after weekly matrices.
 
 /** Installs only the requested conditions chart; no PostHog/OpenAI calls. */
 function setupGoodLeapConditionsChart() {
@@ -66,21 +68,32 @@ function refreshGoodLeapConditionsChart_(spreadsheet, sheet, force) {
   const headers = source.getRange(1, 1, 1, source.getLastColumn()).getValues()[0];
   // Empty rows are excluded by Project ID. The shared bounds include future rows.
   const rows = buildGoodLeapConditionsChartRows_(headers, source.getName(), source.getMaxRows());
+  let weekly = spreadsheet.getSheetByName('AI Weekly Summary');
+  if (!weekly) weekly = spreadsheet.insertSheet('AI Weekly Summary');
+  ensureAIAnalysisSheetCapacity_(weekly, 10, GOODLEAP_CONDITIONS_TABLE_COLUMN + 1);
   ensureAIAnalysisSheetCapacity_(sheet, 44, 57);
-  const table = sheet.getRange(36, 46, 5, 2);
+  const column = GOODLEAP_CONDITIONS_TABLE_COLUMN;
+  weekly.getRange(1, column, 1, 2).merge().setValue(GOODLEAP_CONDITIONS_CHART_TITLE)
+    .setBackground('#6e04bd').setFontColor('#ffffff').setFontWeight('bold');
+  const table = weekly.getRange(2, column, 5, 2);
   table.setValues([['Condition', 'Projects'], ...rows.map((row) => [row[0], ''])]);
-  sheet.getRange(37, 47, 4, 1).setFormulas(rows.map((row) => [row[1]]));
+  weekly.getRange(3, column + 1, 4, 1).setFormulas(rows.map((row) => [row[1]]));
   table.setFontFamily('Arial').setFontSize(11).setVerticalAlignment('middle');
-  sheet.getRange(36, 46, 1, 2).setBackground('#6e04bd').setFontColor('#ffffff').setFontWeight('bold');
-  sheet.getRange(37, 47, 4, 1).setNumberFormat('0');
-  sheet.setColumnWidth(46, 520);
-  sheet.setColumnWidth(47, 100);
-  sheet.getRange(42, 46).setValue('Missing Data: any blank in Y, Z or AA. FALSE is not missing.').setFontSize(10);
-  sheet.getRange(43, 46).setValue('Total Projects is a reference, not an additional group to sum.').setFontSize(10);
+  weekly.getRange(2, column, 1, 2).setBackground('#6e04bd').setFontColor('#ffffff').setFontWeight('bold');
+  weekly.getRange(3, column + 1, 4, 1).setNumberFormat('0');
+  weekly.setColumnWidth(column, 520);
+  weekly.setColumnWidth(column + 1, 100);
+  weekly.getRange(8, column, 1, 2).merge().setValue('Missing Data: any blank in ratio/offset checks. FALSE is not missing.').setFontSize(10).setWrap(true);
+  weekly.getRange(9, column, 1, 2).merge().setValue('Total Projects is a reference, not an additional group to sum.').setFontSize(10).setWrap(true);
   SpreadsheetApp.flush();
-  const existing = sheet.getCharts().filter((chart) => chart.getOptions().get('title') === GOODLEAP_CONDITIONS_CHART_TITLE);
-  if (existing.length === 0 || force) {
-    const builder = sheet.newChart();
+  const existing = sheet.getCharts().filter((chart) =>
+    [GOODLEAP_CONDITIONS_CHART_TITLE, GOODLEAP_CONDITIONS_PREVIOUS_TITLE].includes(chart.getOptions().get('title')));
+  const ranges = existing.length === 1 ? existing[0].getRanges() : [];
+  const sourceMatches = ranges.length === 1 && ranges[0].getSheet().getName() === weekly.getName() &&
+    ranges[0].getA1Notation() === table.getA1Notation();
+  if (existing.length !== 1 || force || !sourceMatches ||
+      existing[0].getOptions().get('title') !== GOODLEAP_CONDITIONS_CHART_TITLE) {
+    const builder = existing.length ? existing[0].modify().clearRanges() : sheet.newChart();
     const chart = builder.asColumnChart().addRange(table).setNumHeaders(1)
       .setPosition(5, 46, 0, 0)
       .setOption('title', GOODLEAP_CONDITIONS_CHART_TITLE)
@@ -91,11 +104,19 @@ function refreshGoodLeapConditionsChart_(spreadsheet, sheet, force) {
       .setOption('hAxis', {slantedText: true, slantedTextAngle: 20, textStyle: {fontSize: 12}})
       .setOption('vAxis', {title: 'Projects', minValue: 0, format: '0'})
       .build();
-    existing.forEach((previous) => sheet.removeChart(previous));
-    sheet.insertChart(chart);
+    if (existing.length) {
+      sheet.updateChart(chart);
+      existing.slice(1).forEach(previous => sheet.removeChart(previous));
+    } else sheet.insertChart(chart);
   }
-  const counts = sheet.getRange(37, 47, 4, 1).getValues().map((row) => row[0]);
-  return {sheet: sheet.getName(), chart: GOODLEAP_CONDITIONS_CHART_TITLE, counts, charts: sheet.getCharts().length};
+  // Remove only the known managed legacy table after reconnecting the chart.
+  if (String(sheet.getRange(36, 46).getValue()) === 'Condition' &&
+      String(sheet.getRange(36, 47).getValue()) === 'Projects') {
+    sheet.getRange(36, 46, 8, 2).clearContent();
+  }
+  const counts = weekly.getRange(3, column + 1, 4, 1).getValues().map(row => row[0]);
+  return {sheet: sheet.getName(), sourceSheet: weekly.getName(), sourceRange: table.getA1Notation(),
+    chart: GOODLEAP_CONDITIONS_CHART_TITLE, counts, charts: sheet.getCharts().length};
 }
 
 const AI_ANALYSIS_DASHBOARD_CONFIG = {
@@ -2188,7 +2209,8 @@ function doesAIAnalysisDashboardLayoutMatch_(
   }
   if (
     sheet.getCharts().filter((chart) =>
-      chart.getOptions().get('title') !== GOODLEAP_CONDITIONS_CHART_TITLE,
+      ![GOODLEAP_CONDITIONS_CHART_TITLE, GOODLEAP_CONDITIONS_PREVIOUS_TITLE]
+        .includes(chart.getOptions().get('title')),
     ).length !==
     expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks)
   ) {
