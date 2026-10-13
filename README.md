@@ -1933,3 +1933,19 @@ project; older emails retain their historical results. Version markers make
 this resumable. The final successful batch publishes Project ID Summary and
 refreshes AI Dashboard without extra energy/map queries. No web-app deployment
 is required; existing triggers use the saved script.
+
+### Current project category counts
+
+The first AI Dashboard chart now reads every category in Project ID Summary's
+`Categories` column, found by header rather than column letter. Semicolon-delimited
+categories count once per unique Project ID (including filtered-out rows). Blank
+IDs and empty category tokens are ignored. Counts are sorted descending; percentages
+use projects with at least one category, so percentages may total over 100%.
+
+The independent `Current Project Category Counts` table is in AI Weekly Summary
+at BH:BJ. The chart is titled `Current Project Count by Category`. Historical
+weekly email tables and charts retain their original source and meaning.
+Every successful Project ID Summary refresh republishes these counts, even if
+project rows are unchanged. Dashboard refresh does the same. The standalone
+`refreshCurrentProjectCategories()` reads the whole existing summary and republishes
+only this table/chart, without new AI requests or warehouse queries.
