@@ -148,7 +148,7 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   ],
   WEEKLY_MATRIX_TITLE: 'Weekly Category Matrix',
   WEEKLY_MATRIX_START_COLUMN: 8,
-  WEEKLY_CHART_MATRIX_TITLE: 'Weekly Production vs Other Categories',
+  WEEKLY_CHART_MATRIX_TITLE: 'Weekly Categorized Emails Received: Production vs Other Issues',
   PRODUCTION_PROJECTS_MATRIX_TITLE: 'Weekly Production Projects',
   UPDATED_PRODUCTION_PROJECTS_MATRIX_TITLE:
     'Weekly Production Updated Projects',
@@ -1472,7 +1472,40 @@ function doesAIWeeklyProjectStatusMatrixMatch_(sheet, matrix, title) {
   ).trim();
 }
 
+/** Updates existing titles only; preserves chart IDs, ranges and all counts. */
+function renameWeeklyReceivedEmailsChart() {
+  const result = renameWeeklyReceivedEmailsChartForSpreadsheet_(getOrCreateResources_().spreadsheet);
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+function renameWeeklyReceivedEmailsChartForSpreadsheet_(spreadsheet) {
+  const previousTitle = 'Weekly Production vs Other Categories';
+  const title = AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_MATRIX_TITLE;
+  const result = {title, renamedCells: 0, renamedCharts: 0, matchingCharts: 0};
+  [AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME, AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME]
+    .forEach(name => {
+      const sheet = spreadsheet.getSheetByName(name);
+      if (!sheet) return;
+      sheet.createTextFinder(previousTitle).matchEntireCell(true).findAll().forEach(cell => {
+        cell.setValue(title);
+        result.renamedCells += 1;
+      });
+      sheet.getCharts().forEach(chart => {
+        const current = chart.getOptions().get('title');
+        if (current === previousTitle) {
+          sheet.updateChart(chart.modify().setOption('title', title).build());
+          result.renamedCharts += 1;
+        }
+        if (current === previousTitle || current === title) result.matchingCharts += 1;
+      });
+    });
+  SpreadsheetApp.flush();
+  return result;
+}
+
 function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
+  renameWeeklyReceivedEmailsChartForSpreadsheet_(spreadsheet);
   let sheet = spreadsheet.getSheetByName(
     AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME,
   );
@@ -2021,7 +2054,7 @@ function insertAIWeeklyStackedChart_(dashboardSheet, weeklySheet, chartMatrix) {
       0,
       0,
     )
-    .setOption('title', 'Weekly Production vs Other Categories')
+    .setOption('title', AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_MATRIX_TITLE)
     .setOption('isStacked', true)
     .setOption('legend', {position: 'top'})
     .setOption('colors', colors)

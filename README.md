@@ -299,7 +299,7 @@ It:
 - Adds a visible `Weekly Category Matrix` beside the long-format weekly table.
   It includes every configured category, writes explicit zeroes for categories
   without emails in a week, and orders weeks chronologically for charting.
-- Adds a visible `Weekly Production vs Other Categories` matrix. Each analyzed
+- Adds a visible `Weekly Categorized Emails Received: Production vs Other Issues` matrix. Each analyzed
   email is counted once: under `Production with other categories` when its
   multi-value `Categories` cell contains the exact Production category, or
   under `Other Categories without Production` otherwise. New and custom
