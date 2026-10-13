@@ -3,7 +3,7 @@
  *
  * This file belongs in the SAME Apps Script project as OpenAIAnalysis.gs. It
  * reads "AI Analysis", maintains the complete weekly history in
- * "AI Weekly Summary", and shows one all-time Primary Category chart, one
+ * "AI Weekly Summary", and shows current multi-category project counts, one
  * stacked weekly Production-versus-other trend based on Categories, two
  * stacked weekly project-production status charts (created and updated), plus
  * up to eight optional recent Primary Category charts in "AI Dashboard". It
@@ -19,7 +19,9 @@
  * automatic analysis check. The existing five-minute trigger is sufficient.
  */
 
-const GOODLEAP_CONDITIONS_CHART_TITLE = 'GoodLeap Project Conditions';
+const GOODLEAP_CONDITIONS_CHART_TITLE = 'GoodLeap Projects Offset & Ratio Conditions';
+const GOODLEAP_CONDITIONS_PREVIOUS_TITLE = 'GoodLeap Project Conditions';
+const GOODLEAP_CONDITIONS_TABLE_COLUMN = 48; // AV:AW, after weekly matrices.
 
 /** Installs only the requested conditions chart; no PostHog/OpenAI calls. */
 function setupGoodLeapConditionsChart() {
@@ -66,21 +68,32 @@ function refreshGoodLeapConditionsChart_(spreadsheet, sheet, force) {
   const headers = source.getRange(1, 1, 1, source.getLastColumn()).getValues()[0];
   // Empty rows are excluded by Project ID. The shared bounds include future rows.
   const rows = buildGoodLeapConditionsChartRows_(headers, source.getName(), source.getMaxRows());
+  let weekly = spreadsheet.getSheetByName('AI Weekly Summary');
+  if (!weekly) weekly = spreadsheet.insertSheet('AI Weekly Summary');
+  ensureAIAnalysisSheetCapacity_(weekly, 10, GOODLEAP_CONDITIONS_TABLE_COLUMN + 1);
   ensureAIAnalysisSheetCapacity_(sheet, 44, 57);
-  const table = sheet.getRange(36, 46, 5, 2);
+  const column = GOODLEAP_CONDITIONS_TABLE_COLUMN;
+  weekly.getRange(1, column, 1, 2).merge().setValue(GOODLEAP_CONDITIONS_CHART_TITLE)
+    .setBackground('#6e04bd').setFontColor('#ffffff').setFontWeight('bold');
+  const table = weekly.getRange(2, column, 5, 2);
   table.setValues([['Condition', 'Projects'], ...rows.map((row) => [row[0], ''])]);
-  sheet.getRange(37, 47, 4, 1).setFormulas(rows.map((row) => [row[1]]));
+  weekly.getRange(3, column + 1, 4, 1).setFormulas(rows.map((row) => [row[1]]));
   table.setFontFamily('Arial').setFontSize(11).setVerticalAlignment('middle');
-  sheet.getRange(36, 46, 1, 2).setBackground('#6e04bd').setFontColor('#ffffff').setFontWeight('bold');
-  sheet.getRange(37, 47, 4, 1).setNumberFormat('0');
-  sheet.setColumnWidth(46, 520);
-  sheet.setColumnWidth(47, 100);
-  sheet.getRange(42, 46).setValue('Missing Data: any blank in Y, Z or AA. FALSE is not missing.').setFontSize(10);
-  sheet.getRange(43, 46).setValue('Total Projects is a reference, not an additional group to sum.').setFontSize(10);
+  weekly.getRange(2, column, 1, 2).setBackground('#6e04bd').setFontColor('#ffffff').setFontWeight('bold');
+  weekly.getRange(3, column + 1, 4, 1).setNumberFormat('0');
+  weekly.setColumnWidth(column, 520);
+  weekly.setColumnWidth(column + 1, 100);
+  weekly.getRange(8, column, 1, 2).merge().setValue('Missing Data: any blank in ratio/offset checks. FALSE is not missing.').setFontSize(10).setWrap(true);
+  weekly.getRange(9, column, 1, 2).merge().setValue('Total Projects is a reference, not an additional group to sum.').setFontSize(10).setWrap(true);
   SpreadsheetApp.flush();
-  const existing = sheet.getCharts().filter((chart) => chart.getOptions().get('title') === GOODLEAP_CONDITIONS_CHART_TITLE);
-  if (existing.length === 0 || force) {
-    const builder = sheet.newChart();
+  const existing = sheet.getCharts().filter((chart) =>
+    [GOODLEAP_CONDITIONS_CHART_TITLE, GOODLEAP_CONDITIONS_PREVIOUS_TITLE].includes(chart.getOptions().get('title')));
+  const ranges = existing.length === 1 ? existing[0].getRanges() : [];
+  const sourceMatches = ranges.length === 1 && ranges[0].getSheet().getName() === weekly.getName() &&
+    ranges[0].getA1Notation() === table.getA1Notation();
+  if (existing.length !== 1 || force || !sourceMatches ||
+      existing[0].getOptions().get('title') !== GOODLEAP_CONDITIONS_CHART_TITLE) {
+    const builder = existing.length ? existing[0].modify().clearRanges() : sheet.newChart();
     const chart = builder.asColumnChart().addRange(table).setNumHeaders(1)
       .setPosition(5, 46, 0, 0)
       .setOption('title', GOODLEAP_CONDITIONS_CHART_TITLE)
@@ -91,11 +104,19 @@ function refreshGoodLeapConditionsChart_(spreadsheet, sheet, force) {
       .setOption('hAxis', {slantedText: true, slantedTextAngle: 20, textStyle: {fontSize: 12}})
       .setOption('vAxis', {title: 'Projects', minValue: 0, format: '0'})
       .build();
-    existing.forEach((previous) => sheet.removeChart(previous));
-    sheet.insertChart(chart);
+    if (existing.length) {
+      sheet.updateChart(chart);
+      existing.slice(1).forEach(previous => sheet.removeChart(previous));
+    } else sheet.insertChart(chart);
   }
-  const counts = sheet.getRange(37, 47, 4, 1).getValues().map((row) => row[0]);
-  return {sheet: sheet.getName(), chart: GOODLEAP_CONDITIONS_CHART_TITLE, counts, charts: sheet.getCharts().length};
+  // Remove only the known managed legacy table after reconnecting the chart.
+  if (String(sheet.getRange(36, 46).getValue()) === 'Condition' &&
+      String(sheet.getRange(36, 47).getValue()) === 'Projects') {
+    sheet.getRange(36, 46, 8, 2).clearContent();
+  }
+  const counts = weekly.getRange(3, column + 1, 4, 1).getValues().map(row => row[0]);
+  return {sheet: sheet.getName(), sourceSheet: weekly.getName(), sourceRange: table.getA1Notation(),
+    chart: GOODLEAP_CONDITIONS_CHART_TITLE, counts, charts: sheet.getCharts().length};
 }
 
 const AI_ANALYSIS_DASHBOARD_CONFIG = {
@@ -148,13 +169,13 @@ const AI_ANALYSIS_DASHBOARD_CONFIG = {
   ],
   WEEKLY_MATRIX_TITLE: 'Weekly Category Matrix',
   WEEKLY_MATRIX_START_COLUMN: 8,
-  WEEKLY_CHART_MATRIX_TITLE: 'Weekly Production vs Other Categories',
-  PRODUCTION_PROJECTS_MATRIX_TITLE: 'Weekly Production Projects',
+  WEEKLY_CHART_MATRIX_TITLE: 'Weekly Categorized Emails Received: Production vs Other Issues',
+  PRODUCTION_PROJECTS_MATRIX_TITLE: 'Weekly Created vs Rejected Projects',
   UPDATED_PRODUCTION_PROJECTS_MATRIX_TITLE:
     'Weekly Production Updated Projects',
   PROJECT_CREATION_MATRIX_TITLE: 'Weekly Project Creation',
   PROJECT_CREATION_CHART_MATRIX_TITLE:
-    'Weekly Production Projects Chart Source',
+    'Weekly Created vs Rejected Projects Chart Source',
   PROJECT_CREATION_FIRST_WEEK: '2026-08-17',
   PROJECT_CREATION_QUERY_LIMIT: 10000,
   PROJECTS_CREATED_LABEL: 'Projects Created',
@@ -1472,7 +1493,77 @@ function doesAIWeeklyProjectStatusMatrixMatch_(sheet, matrix, title) {
   ).trim();
 }
 
+/** Updates existing titles only; preserves chart IDs, ranges and all counts. */
+function renameWeeklyReceivedEmailsChart() {
+  const result = renameWeeklyReceivedEmailsChartForSpreadsheet_(getOrCreateResources_().spreadsheet);
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+function renameWeeklyReceivedEmailsChartForSpreadsheet_(spreadsheet) {
+  const previousTitle = 'Weekly Production vs Other Categories';
+  const title = AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_MATRIX_TITLE;
+  const result = {title, renamedCells: 0, renamedCharts: 0, matchingCharts: 0};
+  [AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME, AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME]
+    .forEach(name => {
+      const sheet = spreadsheet.getSheetByName(name);
+      if (!sheet) return;
+      sheet.createTextFinder(previousTitle).matchEntireCell(true).findAll().forEach(cell => {
+        cell.setValue(title);
+        result.renamedCells += 1;
+      });
+      sheet.getCharts().forEach(chart => {
+        const current = chart.getOptions().get('title');
+        if (current === previousTitle) {
+          sheet.updateChart(chart.modify().setOption('title', title).build());
+          result.renamedCharts += 1;
+        }
+        if (current === previousTitle || current === title) result.matchingCharts += 1;
+      });
+    });
+  SpreadsheetApp.flush();
+  return result;
+}
+
+/** Rename the created/rejected comparison without rewriting values or ranges. */
+function renameWeeklyCreatedVsRejectedProjects() {
+  const result = renameWeeklyCreatedVsRejectedProjectsForSpreadsheet_(getOrCreateResources_().spreadsheet);
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+function renameWeeklyCreatedVsRejectedProjectsForSpreadsheet_(spreadsheet) {
+  const replacements = new Map([
+    ['Weekly Production Projects', AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE],
+    ['Weekly Production Projects Chart Source', AI_ANALYSIS_DASHBOARD_CONFIG.PROJECT_CREATION_CHART_MATRIX_TITLE],
+  ]);
+  const result = {title: AI_ANALYSIS_DASHBOARD_CONFIG.PRODUCTION_PROJECTS_MATRIX_TITLE,
+    renamedCells: 0, renamedCharts: 0};
+  [AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME, AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME]
+    .forEach(name => {
+      const sheet = spreadsheet.getSheetByName(name);
+      if (!sheet) return;
+      replacements.forEach((title, previous) => {
+        sheet.createTextFinder(previous).matchEntireCell(true).findAll().forEach(cell => {
+          cell.setValue(title);
+          result.renamedCells += 1;
+        });
+      });
+      sheet.getCharts().forEach(chart => {
+        const replacement = replacements.get(chart.getOptions().get('title'));
+        if (replacement) {
+          sheet.updateChart(chart.modify().setOption('title', replacement).build());
+          result.renamedCharts += 1;
+        }
+      });
+    });
+  SpreadsheetApp.flush();
+  return result;
+}
+
 function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
+  renameWeeklyReceivedEmailsChartForSpreadsheet_(spreadsheet);
+  renameWeeklyCreatedVsRejectedProjectsForSpreadsheet_(spreadsheet);
   let sheet = spreadsheet.getSheetByName(
     AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME,
   );
@@ -1502,6 +1593,14 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
       productionProjectsMatrix,
       projectCreationMatrix,
     );
+  const currentCategories = loadCurrentProjectCategoryCounts_(spreadsheet);
+  writeCurrentProjectCategoryCounts_(spreadsheet, currentCategories);
+  // Weekly matrices above retain their historical email-based source.
+  summary = Object.assign({}, summary, {
+    rows: currentCategories.rows,
+    totalCount: currentCategories.categorizedProjects,
+    currentProjectCategories: true,
+  });
   const layoutMatches = doesAIAnalysisDashboardLayoutMatch_(
     sheet,
     summary,
@@ -1517,6 +1616,7 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     doesAIAnalysisDashboardDataMatch_(sheet, summary, visibleWeeks)
   ) {
     refreshGoodLeapConditionsChart_(spreadsheet, sheet);
+    refreshCurrentProjectCategoryChart_(spreadsheet, sheet, currentCategories);
     return {
       sheet: sheet.getName(),
       updated: false,
@@ -1556,6 +1656,8 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
   }
   SpreadsheetApp.flush();
 
+  refreshCurrentProjectCategoryChart_(spreadsheet, sheet, currentCategories);
+
   refreshGoodLeapConditionsChart_(spreadsheet, sheet);
   return {
     sheet: sheet.getName(),
@@ -1565,6 +1667,147 @@ function writeAIAnalysisDashboard_(spreadsheet, summary, force) {
     charts: sheet.getCharts().length,
     weeklyCharts: visibleWeeks.length,
   };
+}
+
+const CURRENT_PROJECT_CATEGORY_TITLE = 'Current Project Count by Category';
+const CURRENT_PROJECT_CATEGORY_TABLE_TITLE = 'Current Project Category Counts';
+const CURRENT_PROJECT_CATEGORY_COLUMN = 60;
+
+function buildCurrentProjectCategoryCounts_(values) {
+  if (!values.length) throw new Error('Project ID Summary headers are missing.');
+  const headers = values[0].map(value => String(value).trim());
+  const idIndex = headers.indexOf('Project ID');
+  const categoryIndex = headers.indexOf('Categories');
+  if (idIndex < 0 || categoryIndex < 0) {
+    throw new Error('Project ID Summary requires Project ID and Categories headers.');
+  }
+  const canonical = new Map(AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_ORDER
+    .map(category => [category.toLowerCase(), category]));
+  const projects = new Map();
+  values.slice(1).forEach(row => {
+    const id = String(row[idIndex] || '').trim().toLowerCase();
+    if (!id) return;
+    if (!projects.has(id)) projects.set(id, new Set());
+    String(row[categoryIndex] || '').split(';').forEach(value => {
+      const token = value.trim().replace(/\s+/g, ' ');
+      if (token) projects.get(id).add(canonical.get(token.toLowerCase()) || token);
+    });
+  });
+  const counts = new Map();
+  let categorizedProjects = 0;
+  projects.forEach(categories => {
+    if (categories.size) categorizedProjects += 1;
+    categories.forEach(category => incrementAIAnalysisCategoryCount_(counts, category));
+  });
+  const rows = buildAIAnalysisCategoryRows_(counts).map(row => Object.assign({}, row, {
+    percentage: categorizedProjects ? row.count / categorizedProjects : 0,
+  }));
+  if (rows.length > AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_SLOT_ROWS) {
+    throw new Error('Too many current project categories for the dashboard category slot.');
+  }
+  return {rows, categorizedProjects, totalProjects: projects.size,
+    categoryAssignments: rows.reduce((sum, row) => sum + row.count, 0)};
+}
+
+function loadCurrentProjectCategoryCounts_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName('Project ID Summary');
+  if (!sheet) throw new Error('Project ID Summary is missing.');
+  return buildCurrentProjectCategoryCounts_(sheet.getDataRange().getValues());
+}
+
+function writeCurrentProjectCategoryCounts_(spreadsheet, summary) {
+  let sheet = spreadsheet.getSheetByName(AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME);
+  if (!sheet) sheet = spreadsheet.insertSheet(AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME);
+  const column = CURRENT_PROJECT_CATEGORY_COLUMN;
+  ensureAIAnalysisSheetCapacity_(sheet, Math.max(20, summary.rows.length + 6), column + 2);
+  const oldRows = Math.max(20, sheet.getLastRow());
+  sheet.getRange(1, column, oldRows, 3).breakApart().clearContent();
+  sheet.getRange(1, column).setValue(CURRENT_PROJECT_CATEGORY_TABLE_TITLE);
+  sheet.getRange(1, column, 1, 3).merge();
+  sheet.getRange(2, column, 1, 3).setValues([['Category', 'Project Count', '% of Categorized Projects']]);
+  formatAIAnalysisDashboardHeader_(sheet.getRange(1, column, 2, 3));
+  sheet.getRange(2, column, 1, 3).setWrap(true);
+  sheet.setRowHeight(2, Math.max(sheet.getRowHeight(2), 44));
+  if (summary.rows.length) {
+    sheet.getRange(3, column, summary.rows.length, 3).setValues(
+      summary.rows.map(row => [row.category, row.count, row.percentage]));
+    sheet.getRange(3, column + 1, summary.rows.length, 1).setNumberFormat('0');
+    sheet.getRange(3, column + 2, summary.rows.length, 1).setNumberFormat('0.00%');
+  }
+  const footer = summary.rows.length + 4;
+  sheet.getRange(footer, column, 3, 2).setValues([
+    ['Projects with Categories', summary.categorizedProjects],
+    ['Total Projects', summary.totalProjects],
+    ['Category Assignments', summary.categoryAssignments],
+  ]);
+  sheet.getRange(footer + 3, column).setValue('Source: Project ID Summary. Each category counts once per Project ID; percentages may exceed 100% in total.');
+  sheet.getRange(footer + 3, column, 1, 3).merge().setWrap(true);
+  sheet.setColumnWidth(column, 290);
+  sheet.setColumnWidth(column + 1, 120);
+  sheet.setColumnWidth(column + 2, 200);
+}
+
+function refreshCurrentProjectCategoryChart_(spreadsheet, dashboard, summary) {
+  dashboard.getRange('C2').setValue('Projects with Categories');
+  dashboard.getRange('D2').setValue(summary.categorizedProjects);
+  dashboard.getRange(4, 1, 1, 3).setValues([['Category', 'Project Count', '% of Categorized Projects']]);
+  dashboard.setColumnWidth(2, 200);
+  dashboard.setColumnWidth(3, 210);
+  dashboard.getRange(4, 1, 1, 3).setWrap(true);
+  dashboard.setRowHeight(4, Math.max(dashboard.getRowHeight(4), 32));
+  const matching = dashboard.getCharts().filter(chart =>
+    ['All-time Count of Primary Category', CURRENT_PROJECT_CATEGORY_TITLE]
+      .includes(chart.getOptions().get('title')));
+  if (matching.length === 1 && summary.rows.length &&
+      matching[0].getOptions().get('title') === CURRENT_PROJECT_CATEGORY_TITLE) {
+    const ranges = matching[0].getRanges();
+    if (ranges.length === 1 && ranges[0].getSheet().getName() ===
+        AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME &&
+        ranges[0].getColumn() === CURRENT_PROJECT_CATEGORY_COLUMN &&
+        ranges[0].getRow() === 2 && ranges[0].getNumColumns() === 2 &&
+        ranges[0].getNumRows() === summary.rows.length + 1) {
+      return summary; // Existing chart follows refreshed source values automatically.
+    }
+  }
+  matching.forEach(chart => dashboard.removeChart(chart));
+  if (summary.rows.length) {
+    const source = spreadsheet.getSheetByName(AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_SHEET_NAME);
+    dashboard.insertChart(dashboard.newChart().asColumnChart()
+      .addRange(source.getRange(2, CURRENT_PROJECT_CATEGORY_COLUMN, summary.rows.length + 1, 2))
+      .setNumHeaders(1).setPosition(2, AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLUMN, 0, 0)
+      .setOption('title', CURRENT_PROJECT_CATEGORY_TITLE)
+      .setOption('legend', {position: 'none'})
+      .setOption('colors', [AI_ANALYSIS_DASHBOARD_CONFIG.CHART_COLOR])
+      .setOption('width', 900).setOption('height', 500)
+      .setOption('series', {0: {dataLabel: 'value'}})
+      .setOption('hAxis', {title: 'Category', slantedText: true, slantedTextAngle: 30})
+      .setOption('vAxis', {title: 'Projects', minValue: 0, format: '0'}).build());
+  }
+  if (!summary.rows.length) dashboard.getRange('A5').setValue('No project categories found.');
+  return summary;
+}
+
+/** Lightweight publication hook: no PostHog reads or AI requests. */
+function refreshCurrentProjectCategories() {
+  return refreshCurrentProjectCategoriesForSpreadsheet_(getOrCreateResources_().spreadsheet);
+}
+
+function refreshCurrentProjectCategoriesForSpreadsheet_(spreadsheet) {
+  const summary = loadCurrentProjectCategoryCounts_(spreadsheet);
+  writeCurrentProjectCategoryCounts_(spreadsheet, summary);
+  const dashboard = spreadsheet.getSheetByName(AI_ANALYSIS_DASHBOARD_CONFIG.SHEET_NAME);
+  if (dashboard) {
+    dashboard.getRange('B2').setValue(new Date()).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    dashboard.getRange(5, 1, AI_ANALYSIS_DASHBOARD_CONFIG.CATEGORY_SLOT_ROWS, 3).clearContent();
+    if (summary.rows.length) {
+      dashboard.getRange(5, 1, summary.rows.length, 3).setValues(
+        summary.rows.map(row => [row.category, row.count, row.percentage]));
+      dashboard.getRange(5, 3, summary.rows.length, 1).setNumberFormat('0.00%');
+    }
+    refreshCurrentProjectCategoryChart_(spreadsheet, dashboard, summary);
+  }
+  console.log(JSON.stringify(summary));
+  return summary;
 }
 
 function initializeAIAnalysisDashboardLayout_(sheet, visibleWeeks) {
@@ -1637,7 +1880,7 @@ function writeAIAnalysisDashboardValues_(
     .getRange('B2')
     .setValue(new Date())
     .setNumberFormat('yyyy-mm-dd hh:mm:ss');
-  sheet.getRange('C2').setValue('Total Categorized Rows').setFontWeight('bold');
+  sheet.getRange('C2').setValue('Projects with Categories').setFontWeight('bold');
   sheet.getRange('D2').setValue(summary.totalCount).setNumberFormat('0');
   sheet.getRange('A3').setValue('Historical Weeks').setFontWeight('bold');
   sheet.getRange('B3').setValue(summary.weeks.length).setNumberFormat('0');
@@ -1673,7 +1916,9 @@ function writeAIAnalysisDashboardValues_(
 function writeAIAnalysisCategorySlot_(sheet, headerRow, rows, allowEmpty) {
   sheet
     .getRange(headerRow, 1, 1, 3)
-    .setValues([AI_ANALYSIS_DASHBOARD_CONFIG.TABLE_HEADERS]);
+    .setValues([headerRow === 4
+      ? ['Category', 'Project Count', '% of Categorized Projects']
+      : AI_ANALYSIS_DASHBOARD_CONFIG.TABLE_HEADERS]);
   const dataStartRow = headerRow + 1;
   if (rows.length > 0) {
     const output = rows.map((row) => [
@@ -1867,7 +2112,7 @@ function insertAIWeeklyStackedChart_(dashboardSheet, weeklySheet, chartMatrix) {
       0,
       0,
     )
-    .setOption('title', 'Weekly Production vs Other Categories')
+    .setOption('title', AI_ANALYSIS_DASHBOARD_CONFIG.WEEKLY_CHART_MATRIX_TITLE)
     .setOption('isStacked', true)
     .setOption('legend', {position: 'top'})
     .setOption('colors', colors)
@@ -2001,7 +2246,8 @@ function doesAIAnalysisDashboardLayoutMatch_(
   }
   if (
     sheet.getCharts().filter((chart) =>
-      chart.getOptions().get('title') !== GOODLEAP_CONDITIONS_CHART_TITLE,
+      ![GOODLEAP_CONDITIONS_CHART_TITLE, GOODLEAP_CONDITIONS_PREVIOUS_TITLE]
+        .includes(chart.getOptions().get('title')),
     ).length !==
     expectedAIAnalysisDashboardChartCount_(summary, visibleWeeks)
   ) {
@@ -2059,7 +2305,8 @@ function doesAIAnalysisCategorySlotMatch_(sheet, headerRow, rows, allowEmpty) {
     headers.some(
       (header, index) =>
         String(header).trim() !==
-        AI_ANALYSIS_DASHBOARD_CONFIG.TABLE_HEADERS[index],
+        (headerRow === 4 ? ['Category', 'Project Count', '% of Categorized Projects']
+          : AI_ANALYSIS_DASHBOARD_CONFIG.TABLE_HEADERS)[index],
     )
   ) {
     return false;
@@ -2076,7 +2323,7 @@ function doesAIAnalysisCategorySlotMatch_(sheet, headerRow, rows, allowEmpty) {
   if (rows.length === 0 && allowEmpty) {
     return (
       String(values[0][0]).trim() ===
-      'No categorized AI Analysis rows found.'
+      (headerRow === 4 ? 'No project categories found.' : 'No categorized AI Analysis rows found.')
     );
   }
 

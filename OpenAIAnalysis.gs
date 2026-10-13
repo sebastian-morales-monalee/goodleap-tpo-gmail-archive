@@ -27,7 +27,7 @@ const OPENAI_ANALYSIS_CONFIG = {
   MAX_BATCH_SIZE: 20,
   DEFAULT_MAX_EMAIL_CHARACTERS: 30000,
   MAX_OUTPUT_TOKENS: 2200,
-  CATEGORY_RULES_VERSION: '2026-09-25-production-tolerance-v3',
+  CATEGORY_RULES_VERSION: '2026-10-07-sun-hours-evidence-v6',
 };
 
 const OPENAI_ANALYSIS_PROPERTY_KEYS = {
@@ -112,18 +112,20 @@ const OPENAI_ANALYSIS_INSTRUCTIONS = [
   'Use null for an absent numeric value and an empty array for an absent list.',
   'Return concise English text even if the source contains another language.',
   'Classify the substantive topics in the newest message body from scratch. Do not carry categories, rejection reasons, or next steps forward from earlier emails, quoted replies, signatures, a repeated subject line, or archive metadata.',
-  'Choose every category directly supported by the newest message and exactly one primary category for its main purpose. A category can be present whether its issue is open, corrected, or being clarified, but not solely because of incidental terminology.',
-  'Production: an explicit production-yield or benchmark discrepancy requiring action, out-of-tolerance result, failed production validation, or a direct request to calculate, recheck, or revise production. If the newest message says production is within tolerance or its validation is approved, do not select Production just because it mentions kWh, a benchmark, or proposed production. A separate explicit production failure or requested correction in that same newest message is required. A generic production subject or provisional estimate with compliance unverified only because a design or documents are pending does not qualify.',
+  'For categories and primary_category, use ONLY the supplied Category evidence block: from Hello Team up to, but not including, Proposed Production. Rejection Reasons, Steps to Clear, and Note in that block are eligible. Ignore everything after that boundary, especially For additional reference, template reminders, signatures and generic instructions. For a non-template email without those markers, use its newest substantive body, never quoted history.',
+  'Choose only concrete unresolved rejection reasons, blockers, or project-specific corrections explicitly stated in that block. A keyword, section prefix, resolved issue, generic recommendation, or hypothetical/conditional instruction is not evidence. For every named category return category_evidence containing the category and a short exact verbatim quote from that block proving the issue. Other requires no quote. Use the full newest email separately to extract numeric production, benchmark and tolerance fields; the category restriction must not truncate numeric extraction.',
+  'Production: an explicit production-yield or benchmark discrepancy requiring action AND a numeric tolerance strictly below -5% or above +15%. Both conditions are required. -5% and +15% are within range. Never select Production when tolerance is missing or within range, even if a rejection bullet starts with Production, requests a recalculation, or discusses Offset, shading or sun hours. A generic production subject or provisional estimate with compliance unverified does not qualify.',
   'Layout: a substantive array or panel placement, panel count per roof plane or azimuth, roof design, orientation, tilt, or proposed-versus-installed layout mismatch or change. A generic mention of a proposal or design is insufficient; an unfinished revised layout that must be finalized does qualify.',
   'Equipment: a substantive issue or change involving a named panel, inverter, module, battery, model, part type, electrical component, or its required count or compatibility. Do not use Equipment for generic installation photos, panels merely being repositioned, or the word system.',
   'Shading / Site Conditions: a substantive concern or action involving trees, obstructions, shade assumptions, LiDAR shading, site conditions, or their representation in the design. Do not infer it solely from a shade-report link or from a Sun Hours measurement with no shading/site topic.',
   'Structure: a substantive roof or supporting-structure eligibility, load, integrity, engineering, or construction concern. Ordinary roof-plane placement or panel tilt/layout alone is Layout, not Structure.',
-  'Documentation: required, missing, requested, submitted, corrected, or insufficient documents, forms, signatures, audit trails, photographs, or other evidence. An explicit missing-document or missing-installation-photo requirement must include Documentation, even if another topic is also discussed. A generic reference to a portal or proposal tool is not enough.',
-  'Offset: a substantive solar-to-consumption offset percentage, offset threshold, consumer-agreement offset, or offset acknowledgment requirement. Do not use Offset for any other sense of the word or merely because an Offset Acknowledgement form is mentioned without discussing the offset itself.',
-  'Communication / Follow-up: a substantive status inquiry, request for a new review or clarification, project identification question, ticket merge, acknowledgment, or coordination message. Do not add it just for a greeting, standard please-reply footer, or the ordinary instruction to upload a document or update a design.',
-  'Sun Hours: an explicit sunhours, sun hours, sun-hours, or equivalent solar-exposure-hours measurement, requirement, or discussion. Do not infer it from unrelated production, shade-report links, or generic shading discussion.',
+  'Documentation: a specific missing, invalid, unsigned, insufficient or explicitly requested document, form, photograph or evidence that is an actual blocker in the category block. Do not select it merely because documents were submitted, a design must be updated, or a template says upload a revised screenshot, sync the portal, or review a shade report. A project-specific signed Offset Acknowledgement requirement in Steps to Clear does qualify.',
+  'Offset: an explicit project-specific offset violation or pending offset correction/acknowledgment in the category block. A generic reminder to keep offset below 110% or 150%, especially after For additional reference, never qualifies.',
+  'Communication / Follow-up: an explicit project-specific unresolved status inquiry, clarification, identification problem, review request, ticket merge or coordination blocker in the category block. Do not add it for a greeting, acknowledgment, standard please-reply footer, generic re-review instruction, or the ordinary steps to upload evidence or update a design.',
+  'Sun Hours: ONLY an explicit unresolved failure of a sun-hour requirement, insufficient sun hours, or a required correction to sun-hour values. Recognize sunhours, sun hours, sun-hours, sun-hour requirement, minimum sunlight hours and solar-exposure hours. A measurement or a generic minimum requirement alone is insufficient. Never infer Sun Hours solely from trees, shading, low production, irradiance, solar access, TSRF or a shade-report link. Shading / Site Conditions and Sun Hours may coexist only when each is explicitly supported. AI Summary and Technical Notes must consistently reflect the original category evidence block; neither generated text nor an earlier email can invent a sun-hour failure. Return an exact source quote in category_evidence for Sun Hours; omit it when no explicit evidence exists.',
+  'Sun Hours examples: shading does not meet the stated sun-hour requirement qualifies. Revise onsite tree/shading conditions with no explicit hours issue does not qualify. The design meets the minimum sun hours does not qualify. A footer saying ensure minimum sun hours does not qualify.',
   'Other: only when none of the named categories is supported by the newest body. Never combine Other with a named category.',
-  'Examples: "production is within tolerance; please send installation photos" is Documentation only. "Production validation was approved at 10,354 kWh versus a 10,352 kWh benchmark" is not Production. "Production is outside tolerance; panel counts by azimuth differ" is Production and Layout. "The revised layout is not finalized and required photos are missing; production compliance cannot yet be verified" is Layout and Documentation, not Production or Equipment. "The offset exceeds 110%; submit an acknowledgment form" is Offset and Documentation, not Production unless a separate production discrepancy is stated.',
+  'Examples: "production is within tolerance; required installation photos are missing" is Documentation only. "Production validation was approved at 10,354 kWh versus a 10,352 kWh benchmark" is not Production. "Production is outside tolerance; panel counts by azimuth differ" with Tolerance: -28.22% is Production and Layout. "Production - Offset exceeds 110%; upload a signed Offset Acknowledgement" with Tolerance: 1.45% is Offset and Documentation, not Production or Communication / Follow-up. Offset mentioned only in the footer produces no Offset category.',
   'Rejection reasons must describe the concrete issue stated in the email.',
   'Steps to clear must describe explicit or directly supported next actions.',
   'Set requires_human_review to true for ambiguity, conflicting values, missing context, or high-impact technical judgment.',
@@ -418,6 +420,17 @@ function reclassifyLatestProjectEmailsWithOpenAI() {
     });
     SpreadsheetApp.flush();
     stats.pendingAfterRun = pending.length - stats.reclassified;
+    if (stats.pendingAfterRun === 0 && stats.errors === 0) {
+      // Publish the category change without requerying unrelated energy/map data.
+      if (typeof refreshProjectIdSummarySafely_ === 'function') {
+        stats.projectIdSummary = refreshProjectIdSummarySafely_(
+          spreadsheet, {refreshMapData: false},
+        );
+      }
+      if (typeof refreshAIAnalysisDashboardSafely_ === 'function') {
+        stats.dashboard = refreshAIAnalysisDashboardSafely_();
+      }
+    }
     console.log(JSON.stringify(stats, null, 2));
     return stats;
   } finally {
@@ -476,7 +489,7 @@ function repairLatestProjectSunHoursCategories() {
       const categories = splitOpenAIAnalysisCategories_(
         recorded.row[categoriesIndex],
       );
-      if (containsOpenAISunHours_(cleanedBody)) {
+      if (hasExplicitOpenAISunHoursNeed_(extractOpenAICategoryBlock_(cleanedBody))) {
         stats.literalMentions += 1;
         if (!categories.includes('Sun Hours')) categories.push('Sun Hours');
       }
@@ -1106,42 +1119,84 @@ function requestOpenAIEmailAnalysis_(candidate, settings) {
   }
 
   validateOpenAIAnalysis_(analysis);
-  applyOpenAICategoryEvidenceRules_(analysis, cleanedBody);
+  applyOpenAICategoryEvidenceRules_(analysis, cleanedBody, candidate.tolerancePercent);
   return {
     responseId: String(responseObject.id || ''),
     analysis,
   };
 }
 
-function applyOpenAICategoryEvidenceRules_(analysis, cleanedBody) {
-  if (
-    hasExplicitOpenAIProductionToleranceFailure_(cleanedBody) &&
-    !analysis.categories.includes('Production')
-  ) {
+/** Numeric extraction still receives the full email; only classification is scoped. */
+function extractOpenAICategoryBlock_(value) {
+  let text = String(value || '').replace(/\r\n?/g, '\n');
+  const greeting = /\bHello\s+Team\b\s*,?/i.exec(text);
+  if (greeting) text = text.slice(greeting.index);
+  const boundaries = [
+    /(?:^|\n)[ \t]*Proposed\s+Production\s*:/i,
+    /\bFor\s+additional\s+reference\b/i,
+    /(?:^|\n)\s*Reminder\s*:/i,
+    /\bPlease\s+ensure\s+the\s+system\s+offset\b/i,
+  ];
+  let end = text.length;
+  boundaries.forEach((pattern) => {
+    const match = pattern.exec(text);
+    if (match) end = Math.min(end, match.index);
+  });
+  return text.slice(0, end).trim();
+}
+
+function openAICategoryTolerance_(body, fallback) {
+  const match = /\bTolerance\s*(?::|by)\s*([+-]?\d+(?:[.,]\d+)?)\s*%/i.exec(body);
+  // Never use an AI-generated numeric value as proof of production failure.
+  // The fallback is the value extracted from this same archived email.
+  const value = match ? match[1].replace(',', '.') : fallback;
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+  const number = Number(String(value).replace(/%$/, '').trim());
+  return Number.isFinite(number) ? number : null;
+}
+
+function applyOpenAICategoryEvidenceRules_(analysis, cleanedBody, fallbackTolerance) {
+  const block = extractOpenAICategoryBlock_(cleanedBody);
+  const normalized = block.replace(/\s+/g, ' ').trim();
+  const evidence = Array.isArray(analysis.category_evidence) ? analysis.category_evidence : [];
+  // Exact source evidence is required for every named category, not just Offset.
+  const supported = new Set(evidence.filter((item) => {
+    const quote = String(item.quote || '').replace(/\s+/g, ' ').trim();
+    return quote.length >= 8 && normalized.includes(quote);
+  }).map((item) => item.category));
+  analysis.categories = analysis.categories.filter((category) => supported.has(category));
+  const tolerance = openAICategoryTolerance_(cleanedBody, fallbackTolerance);
+  if (tolerance === null || (tolerance >= -5 && tolerance <= 15) ||
+      !hasExplicitOpenAIProductionIssue_(block)) {
+    analysis.categories = analysis.categories.filter((category) => category !== 'Production');
+  } else if (hasExplicitOpenAIProductionToleranceFailure_(block) &&
+      !analysis.categories.includes('Production')) {
     analysis.categories.push('Production');
-    if (analysis.primary_category === 'Other') {
-      analysis.primary_category = 'Production';
-    }
   }
-  if (
-    analysis.categories.includes('Production') &&
-    hasExplicitOpenAIProductionApproval_(cleanedBody) &&
-    !hasExplicitOpenAIProductionIssue_(cleanedBody)
-  ) {
-    analysis.categories = analysis.categories.filter(
-      (category) => category !== 'Production',
-    );
-    if (!analysis.categories.length) analysis.categories = ['Other'];
-    if (analysis.primary_category === 'Production') {
-      analysis.primary_category = analysis.categories[0];
+  const checks = {
+    Documentation: hasExplicitOpenAIDocumentationNeed_,
+    'Communication / Follow-up': hasExplicitOpenAIFollowUpNeed_,
+    Offset: hasExplicitOpenAIOffsetNeed_,
+    'Sun Hours': hasExplicitOpenAISunHoursNeed_,
+  };
+  Object.keys(checks).forEach((category) => {
+    const check = checks[category];
+    if (!evidence.some((item) => item.category === category &&
+        normalized.includes(String(item.quote || '').replace(/\s+/g, ' ').trim()) &&
+        check(item.quote))) {
+      analysis.categories = analysis.categories.filter((item) => item !== category);
     }
-  }
+  });
   if (
-    containsOpenAISunHours_(cleanedBody) &&
+    hasExplicitOpenAISunHoursNeed_(block) &&
     !analysis.categories.includes('Sun Hours')
-  ) analysis.categories.push('Sun Hours');
+  ) {
+    analysis.categories.push('Sun Hours');
+    if (!Array.isArray(analysis.category_evidence)) analysis.category_evidence = [];
+    analysis.category_evidence.push({category: 'Sun Hours', quote: openAISunHoursEvidence_(block)});
+  }
   if (
-    hasExplicitOpenAIDocumentationNeed_(cleanedBody) &&
+    hasExplicitOpenAIDocumentationNeed_(block) &&
     !analysis.categories.includes('Documentation')
   ) analysis.categories.push('Documentation');
   if (analysis.categories.length > 1 && analysis.categories.includes('Other')) {
@@ -1151,6 +1206,14 @@ function applyOpenAICategoryEvidenceRules_(analysis, cleanedBody) {
     if (analysis.primary_category === 'Other') {
       analysis.primary_category = analysis.categories[0];
     }
+  }
+  analysis.categories = Array.from(new Set(analysis.categories));
+  if (!analysis.categories.length) analysis.categories = ['Other'];
+  if (!analysis.categories.includes(analysis.primary_category)) {
+    analysis.primary_category = analysis.categories[0];
+  }
+  if (!block || (tolerance === null && hasExplicitOpenAIProductionIssue_(block))) {
+    analysis.requires_human_review = true;
   }
 }
 
@@ -1182,17 +1245,51 @@ function hasExplicitOpenAIProductionIssue_(value) {
 
 function hasExplicitOpenAIDocumentationNeed_(value) {
   const text = String(value || '');
+  if (/\n/.test(text)) return text.split(/\n+/).some(hasExplicitOpenAIDocumentationNeed_);
+  if (/\bif\s+(?:any|the|your|you)\b/i.test(text)) return false;
+  if (/\b(?:already|successfully)\s+(?:submitted|uploaded|provided|received)|\b(?:was|were|has been|have been)\s+(?:submitted|uploaded|provided|received|approved)\b/i.test(text)) return false;
   return (
     /\b(?:documents?|documentation|paperwork|installation photos?|site photos?)\b.{0,80}?\b(?:are|is|remain|remains)\s+(?:still\s+)?(?:missing|required|needed|outstanding)\b/i.test(text) ||
     /\b(?:missing|outstanding|required)\s+(?:(?:updated|current|installation|site|other|supporting)\s+){0,4}(?:documents?|documentation|paperwork|photos?)\b/i.test(text) ||
-    /\b(?:please|must|need to|required to)\s+(?:\w+\s+){0,5}(?:provide|upload|submit|send|attach)\s+(?:\w+\s+){0,5}(?:documents?|documentation|installation photos?|site photos?)\b/i.test(text)
+    /\b(?:please|must|need to|required to)\s+(?:\w+\s+){0,5}(?:provide|upload|submit|send|attach)\s+(?:\w+\s+){0,5}(?:documents?|documentation|installation photos?|site photos?)\b/i.test(text) ||
+    /\b(?:upload|submit|provide|send|missing|unsigned|required|invalid)\b[^.!?\n]{0,100}\b(?:signed\s+)?(?:offset\s+acknowledg(?:e)?ment|consent|authorization|signature|audit trail|as[- ]built|shade report)\b/i.test(text)
+    || /\b(?:form|signature|audit trail|shade report|as[- ]built|photographs?|evidence)\b[^.!?\n]{0,70}\b(?:missing|unsigned|invalid|insufficient|outstanding|required)\b/i.test(text)
   );
 }
 
+function hasExplicitOpenAIFollowUpNeed_(value) {
+  const text = String(value || '');
+  if (/\bif\s+(?:any|the|your|you)\b|\bfeel free\b/i.test(text)) return false;
+  return /\b(?:status update|status inquiry|clarify|clarification|which project|identify the project|merge (?:the )?(?:tickets?|cases?)|request (?:a |the )?(?:new |re[- ]?)?review|please (?:re[- ]?review|confirm|explain))\b/i.test(text);
+}
+
+function hasExplicitOpenAIOffsetNeed_(value) {
+  const text = String(value || '');
+  if (/\n/.test(text)) return text.split(/\n+/).some(hasExplicitOpenAIOffsetNeed_);
+  if (/\b(?:if|reminder|please ensure|does not exceed|within (?:the )?offset)\b/i.test(text)) return false;
+  return /\boffset\b[^.!?\n]{0,100}\b(?:exceeds?|above|over|too high|violation|incorrect|must|required|missing)\b/i.test(text) ||
+    /\b(?:reduce|correct|update|lower)\b[^.!?\n]{0,80}\boffset\b/i.test(text);
+}
+
+function openAISunHoursEvidence_(value) {
+  const sentences = String(value || '').split(/[\n.!?]+/);
+  for (const sentence of sentences) {
+    const text = sentence.trim();
+    if (!containsOpenAISunHours_(text)) continue;
+    // Generic, conditional and resolved reminders are not rejection evidence.
+    if (/\b(?:if|reminder|please ensure|already corrected|resolved|approved)\b/i.test(text)) continue;
+    if (!/\b(?:does not meet|do not meet|doesn't meet|not meeting|fails? to meet)\b/i.test(text) && /\b(?:meets?|satisfies?|complies with)\s+(?:the\s+|our\s+|stated\s+|required\s+|minimum\s+){0,4}(?:sun[\s-]*hours?|sunlight hours?|solar[\s-]*exposure[\s-]*hours?)/i.test(text)) continue;
+    if (/\b(?:does not meet|do not meet|doesn't meet|not meeting|fails? to meet|failed|insufficient|below|less than|too low|incorrect|missing|not satisfied|not met|unmet|must|need to|required to|recheck|adjust|correct|revise|update|increase)\b/i.test(text)) return text;
+  }
+  return '';
+}
+
+function hasExplicitOpenAISunHoursNeed_(value) {
+  return Boolean(openAISunHoursEvidence_(value));
+}
+
 function containsOpenAISunHours_(value) {
-  return /(^|[^a-z0-9])sun[\s-]*hours?(?=$|[^a-z0-9])/i.test(
-    String(value || ''),
-  );
+  return /(^|[^a-z0-9])(?:sun[\s-]*hours?|sunlight[\s-]+hours?|solar[\s-]*exposure[\s-]*hours?)(?=$|[^a-z0-9])/i.test(String(value || ''));
 }
 
 function loadOpenAIEmailBody_(candidate) {
@@ -1278,6 +1375,9 @@ function buildOpenAIEmailInput_(candidate, cleanedBody) {
     '',
     'Newest email content:',
     cleanedBody,
+    '',
+    'Category evidence block (the only permitted source of category quotes):',
+    extractOpenAICategoryBlock_(cleanedBody),
   ].join('\n');
 }
 
@@ -1293,6 +1393,17 @@ function buildOpenAIAnalysisJsonSchema_() {
       categories: {
         type: 'array',
         items: {type: 'string', enum: OPENAI_ANALYSIS_CATEGORIES},
+      },
+      category_evidence: {
+        type: 'array',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            category: {type: 'string', enum: OPENAI_ANALYSIS_CATEGORIES},
+            quote: {type: 'string'},
+          },
+          required: ['category', 'quote'],
+        },
       },
       review_type: {
         type: 'string',
@@ -1315,6 +1426,7 @@ function buildOpenAIAnalysisJsonSchema_() {
     required: [
       'primary_category',
       'categories',
+      'category_evidence',
       'review_type',
       'review_status',
       'rejection_reasons',
