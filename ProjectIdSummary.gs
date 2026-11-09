@@ -404,8 +404,7 @@ const PROJECT_ID_SUMMARY_TOLERANCE_RANGE_HEADER =
 const PROJECT_ID_SUMMARY_STATUS_HEADER = 'Status';
 const PROJECT_ID_SUMMARY_STATUS_ORDER_HEADER = 'Status Order';
 
-// Re-enable explicitly to restore the optional comparison-delta outputs.
-const PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = false;
+const PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = true;
 const PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS =
   PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS ? PROJECT_ID_SUMMARY_DELTA_HEADERS : [];
 const PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS = PROJECT_ID_SUMMARY_BASE_HEADERS.concat(
@@ -2243,6 +2242,61 @@ function buildProjectIdSummaryDeltaValues_(comparisonValues) {
   ].concat(comparisonValues.slice(3));
 }
 
+/** Restore the saved Shade Reports Comparison results without fetching new data. */
+function restoreProjectIdSummaryComparisonDeltas() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('Another GoodLeap execution is running; retry when it finishes.');
+  try {
+    const spreadsheet = getOrCreateResources_().spreadsheet;
+    const sheet = spreadsheet.getSheetByName(PROJECT_ID_SUMMARY_CONFIG.SHEET_NAME);
+    if (!sheet || sheet.getLastRow() < 2) throw new Error('Project ID Summary has no project rows.');
+    const deltas = loadProjectIdSummaryComparisonDeltas_(spreadsheet);
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const ids = sheet.getRange(2, projectIdSummaryColumn_('Project ID'), sheet.getLastRow() - 1, 1).getValues();
+    const blank = PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.map(() => '');
+    const rows = ids.map(([id]) => deltas.get(String(id).trim().toLowerCase()) || blank);
+    const populated = rows.filter(row => row.some(Number.isFinite)).length;
+    if (!populated) throw new Error('No numeric comparison results match the current summary. No cells changed.');
+    insertProjectIdSummaryDeltaColumns_(sheet, headers);
+    const start = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
+    const width = PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.length;
+    sheet.showColumns(start, width);
+    sheet.setColumnWidths(start, width, 145);
+    sheet.getRange(1, start, 1, width)
+      .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_HEADER_BACKGROUND)
+      .setFontColor(PROJECT_ID_SUMMARY_CONFIG.HEADER_FONT_COLOR)
+      .setFontWeight('bold').setHorizontalAlignment('center').setWrap(true);
+    sheet.getRange(2, start, rows.length, width).setValues(rows)
+      .setBackground(PROJECT_ID_SUMMARY_CONFIG.DELTA_DATA_BACKGROUND)
+      .setNumberFormat('0.####');
+    styleProjectIdSummaryAbsoluteDeltaColumns_(sheet, 1, 1, true);
+    styleProjectIdSummaryAbsoluteDeltaColumns_(sheet, 2, rows.length, false);
+    SpreadsheetApp.flush();
+    const saved = sheet.getRange(2, start, rows.length, width).getValues();
+    if (!projectIdSummaryRowsEqual_(saved, rows)) throw new Error('Restored comparison values did not match their source.');
+    const result = {columns: width, projectRows: ids.filter(([id]) => String(id).trim()).length,
+      projectsWithComparisonValues: populated,
+      projectsWithAnnualSolarAccessDelta: saved.filter(row =>
+        Number.isFinite(row[PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.indexOf('Delta Annual Solar Access (pp)')])).length};
+    console.log(JSON.stringify(result));
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function insertProjectIdSummaryDeltaColumns_(sheet, headers) {
+  if (projectIdSummaryHeadersMatch_(headers, PROJECT_ID_SUMMARY_HEADERS)) return;
+  const compact = PROJECT_ID_SUMMARY_HEADERS.filter(header => !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header));
+  if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS || !projectIdSummaryHeadersMatch_(headers, compact)) {
+    throw new Error('Unexpected Project ID Summary headers; comparison columns were not inserted.');
+  }
+  const start = PROJECT_ID_SUMMARY_DELTA_START_INDEX + 1;
+  const width = PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.length;
+  sheet.insertColumnsBefore(start, width);
+  sheet.getRange(1, start, 1, width).setValues([PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS]);
+}
+
 function getOrCreateProjectIdSummaryStateRegionsSheet_(spreadsheet) {
   const sheetName = PROJECT_ID_SUMMARY_CONFIG.STATE_REGIONS_SHEET_NAME;
   let sheet = spreadsheet.getSheetByName(sheetName);
@@ -2510,11 +2564,6 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
         .getDisplayValues()[0]
         .map((value) => String(value).trim())
     : [];
-  const compactHeaders = PROJECT_ID_SUMMARY_HEADERS_WITH_DELTAS.filter(
-    header => !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
-  );
-  compactHeaders.splice(compactHeaders.indexOf('Gmail Message ID') + 1, 0, 'Gmail URL');
-  compactHeaders.splice(3, 0, 'Aurora Shade Report URL');
   const beforeAurora = PROJECT_ID_SUMMARY_ROW_BUILD_HEADERS.filter(header => header !== 'Aurora Shade Report URL');
   const beforeBothLinks = beforeAurora.filter(header => header !== 'Gmail URL');
   if (projectIdSummaryHeadersMatch_(currentHeaders, beforeAurora) ||
@@ -2533,9 +2582,11 @@ function getOrCreateProjectIdSummarySheet_(spreadsheet) {
   insertProjectIdSummaryEmailDaysColumn_(sheet, currentHeaders);
   moveProjectIdSummaryEmailCountColumn_(sheet, currentHeaders);
   if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS &&
-      projectIdSummaryHeadersMatch_(currentHeaders, compactHeaders)) {
-    migrateProjectIdSummarySchema_(sheet, compactHeaders);
-    currentHeaders = PROJECT_ID_SUMMARY_HEADERS;
+      projectIdSummaryHeadersMatch_(currentHeaders, PROJECT_ID_SUMMARY_HEADERS.filter(
+        header => !PROJECT_ID_SUMMARY_DELTA_HEADERS.includes(header),
+      ))) {
+    insertProjectIdSummaryDeltaColumns_(sheet, currentHeaders);
+    currentHeaders = PROJECT_ID_SUMMARY_HEADERS.slice();
     console.log('Project ID Summary: optional comparison deltas re-enabled.');
   }
   const hasUnexpectedContent = currentHeaders.some(Boolean) &&

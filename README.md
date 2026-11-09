@@ -18,12 +18,13 @@ No web-app deployment is required.
 
 ## GoodLeap conditional columns
 
-Comparison delta outputs (formerly BA–BU) are disabled in Project ID Summary.
-Refresh removes those columns and does not load their comparison values.
-Engine Version follows Status Order at AX, with project dates at AY–BB.
-The date block continues with Latest AI Email Received At (BC), First Email
-Received At (BD), Last Email Received At (BE), Days Between First and Last Email
-(BF), Email Count (BG), and Snapshot Date (BH). Email Count is moved, not duplicated,
+Project ID Summary shows the 21 Aurora–Artemis comparison columns at AX:BR.
+They follow Status Order and read the saved Recalculated Weighted Average row
+in Shade Reports Comparison by Project ID. Missing comparisons remain blank.
+Engine Version is at BS, with project dates at BT:BW.
+The date block continues with Latest AI Email Received At (BX), First Email
+Received At (BY), Last Email Received At (BZ), Days Between First and Last Email
+(CA), Email Count (CB), and Snapshot Date (CC). Email Count is moved, not duplicated,
 and uses the green metadata style with integer formatting. Email days are the elapsed timestamp difference
 divided by 24 hours and rounded up. Identical timestamps return zero; missing,
 invalid, or reversed dates remain blank. Each refresh recalculates this integer.
@@ -42,10 +43,9 @@ PDF URL from the record with the greatest Source Received At, not Analyzed At.
 For equal receipt timestamps, the later source row wins. A missing URL on the
 latest record stays blank. Refresh inserts this column after Project URL while
 preserving existing data and updating header-based formulas and formatting.
-To restore these optional outputs, set
-`PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS = true` in ProjectIdSummary.gs,
-save it in Apps Script and refresh the summary. Existing comparison source
-tabs and the original delta definitions remain available for traceability.
+Run `restoreProjectIdSummaryComparisonDeltas()` to insert and populate just the
+comparison block from existing sheet data without running a full refresh.
+The regular summary refresh also maintains this block.
 
 Every Project ID Summary refresh orders complete rows by `Created At`, newest
 first. Missing or invalid dates appear last, with Project ID as the deterministic

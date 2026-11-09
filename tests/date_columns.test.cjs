@@ -16,7 +16,7 @@ test('dates trail Design Updated At and built rows preserve every field', () => 
     if (header === 'Days Between First and Last Email') assert.equal(ordered[i], 1);
     else assert.equal(ordered[i], values[before.indexOf(header)]);
   });
-  assert.equal(headers.indexOf('Latest AI Email Received At'), 54);
+  assert.equal(headers.indexOf('Latest AI Email Received At'), 75);
 });
 test('physical migration preserves columns and is idempotent', () => {
   const ctx = setup();
@@ -46,7 +46,7 @@ test('elapsed email days round up and distinguish zero from missing or invalid d
 test('email days migration inserts once before Snapshot Date without changing existing columns', () => {
   const ctx = setup(); const headers = Array.from(vm.runInContext('PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_DAYS', ctx));
   let inserted = 0;
-  const sheet = {insertColumnAfter: index => {assert.equal(index, 58); inserted++;}, getRange: (r,c) => ({setValue: value => {assert.equal(c,59); assert.equal(value,'Days Between First and Last Email');}})};
+  const sheet = {insertColumnAfter: index => {assert.equal(index, 79); inserted++;}, getRange: (r,c) => ({setValue: value => {assert.equal(c,80); assert.equal(value,'Days Between First and Last Email');}})};
   ctx.insertProjectIdSummaryEmailDaysColumn_(sheet,headers);
   assert.deepEqual(headers, Array.from(vm.runInContext('PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_COUNT_MOVE',ctx)));
   ctx.insertProjectIdSummaryEmailDaysColumn_(sheet,headers); assert.equal(inserted,1);
@@ -57,14 +57,14 @@ test('Email Count physically moves before Snapshot Date, preserving values and a
   const ctx = setup(); const headers = Array.from(vm.runInContext('PROJECT_ID_SUMMARY_HEADERS_BEFORE_EMAIL_COUNT_MOVE',ctx));
   const physical = headers.slice(); let moves = 0;
   const sheet = {getMaxRows:()=>1000, getRange:(r,c,n,w)=>({c}), moveColumns:(range,destination)=>{
-    assert.equal(range.c,32); assert.equal(destination,60);
+    assert.equal(range.c,32); assert.equal(destination,81);
     physical.splice(destination-2,0,physical.splice(range.c-1,1)[0]);moves++;
   }};
   ctx.moveProjectIdSummaryEmailCountColumn_(sheet,headers);
   assert.deepEqual(headers,Array.from(vm.runInContext('PROJECT_ID_SUMMARY_HEADERS',ctx)));
   assert.deepEqual(physical,headers);
   ctx.moveProjectIdSummaryEmailCountColumn_(sheet,headers);assert.equal(moves,1);
-  assert.equal(headers.indexOf('Email Count'),58);
+  assert.equal(headers.indexOf('Email Count'),79);
   assert.match(source,/projectIdSummaryColumn_\('Email Count'\), rowCount, 1\)[\s\S]*?PROJECT_METADATA_DATA_BACKGROUND/);
 });
 test('all four moved dates receive green headers and date styles after other styles', () => {
