@@ -26,6 +26,7 @@ test('energy display formats have requested precision and preserve other formats
   assert.equal(formats.reference_dc_production_kwh, '#,##0.0');
   assert.equal(formats.estimated_annual_ac_production_kwh, '#,##0.0');
   assert.equal(formats['Annual Energy Consumption kWh'], '#,##0');
+  assert.equal(formats.estimated_offset_percent, '#,##0.00');
   assert.equal(formats.dc_ac_ratio, '#,##0.000000');
   assert.equal(formats.dc_ac_correction_factor, '#,##0.000000');
   for (const [method, value] of [['setShowHyperlink', false], ['setFontColor', '#000000'],

@@ -47,7 +47,11 @@ test('refresh preserves existing charts and setup never leaves duplicates', () =
   const range = {setValues(v) { calls.push(v); return this; }, setFormulas(v) {calls.push(v); return this;},
     setFontFamily() {return this;}, setFontSize() {return this;}, setVerticalAlignment() {return this;},
     setBackground() {return this;}, setFontColor() {return this;}, setFontWeight() {return this;},
-    setNumberFormat() {return this;}, setValue() {return this;}, getValues: () => values.map(v => [v])};
+    setNumberFormat() {return this;}, setValue() {return this;}, merge() {return this;}, setWrap() {return this;},
+    getValues: () => values.map(v => [v]), getA1Notation: () => 'AV2:AW6', getSheet: () => weekly};
+  const weekly = {getName: () => 'AI Weekly Summary', getRange: () => range, setColumnWidth() {}};
+  let legacy = true;
+  const oldRange = {getValue: () => legacy ? 'Condition' : '', clearContent() {legacy = false;return this;}};
   const sheet = {getName: () => 'AI Dashboard', getRange: () => range,
     setColumnWidth() {}, getCharts: () => charts, removeChart(c) {charts = charts.filter(v => v !== c);},
     insertChart(c) {charts.push(c);}, newChart() {
@@ -55,11 +59,17 @@ test('refresh preserves existing charts and setup never leaves duplicates', () =
       const options = {};
       const builder = {asColumnChart() {return this;}, addRange(r) {assert.equal(r, range);return this;},
         setNumHeaders() {return this;}, setPosition() {return this;},
-        setOption(k,v) {options[k]=v;return this;}, build() {return {getOptions: () => ({get: k => options[k]})};}};
+        clearRanges() {return this;},
+        setOption(k,v) {options[k]=v;return this;}, build() {return {getOptions: () => ({get: k => options[k]}),
+          getRanges: () => [range], modify: () => builder};}};
       return builder;
     }};
-  const spreadsheet = {getSheetByName: () => ({getRange: () => ({getValues: () => [headers]}),
-    getLastColumn: () => 4, getMaxRows: () => 1000, getName: () => 'Project ID Summary'})};
+  sheet.getRange = (row, column) => ({getValue: () => legacy ? (column === 46 ? 'Condition' : 'Projects') : '',
+    clearContent() {legacy = false;return this;}});
+  sheet.updateChart = c => {charts = [charts[0], c];};
+  const project = {getRange: () => ({getValues: () => [headers]}),
+    getLastColumn: () => 4, getMaxRows: () => 1000, getName: () => 'Project ID Summary'};
+  const spreadsheet = {getSheetByName: name => name === 'AI Weekly Summary' ? weekly : project};
   context.SpreadsheetApp = {flush() {}};
   context.ensureAIAnalysisSheetCapacity_ = () => {};
   context.refreshGoodLeapConditionsChart_(spreadsheet, sheet);
@@ -67,8 +77,12 @@ test('refresh preserves existing charts and setup never leaves duplicates', () =
   assert.equal(builds, 1);
   assert.equal(charts.length, 2);
   const stats = context.refreshGoodLeapConditionsChart_(spreadsheet, sheet, true);
-  assert.equal(builds, 2);
+  assert.equal(builds, 1);
   assert.equal(charts.length, 2);
   assert.deepEqual(Array.from(stats.counts), values);
+  assert.equal(stats.sourceSheet, 'AI Weekly Summary');
+  assert.equal(stats.sourceRange, 'AV2:AW6');
+  assert.equal(stats.chart, 'GoodLeap Projects Offset & Ratio Conditions');
+  assert.equal(legacy, false);
   assert.ok(calls.some(v => v[0][0].startsWith('=COUNTIFS')));
 });

@@ -21,3 +21,6 @@ Thumbs.db
 
 # Generated GoodLeap archive data
 GoodLeap_TPO_Archive/
+
+# Private local validation snapshots and deployment backups
+.codex_tmp/
