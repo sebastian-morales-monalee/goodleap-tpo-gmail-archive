@@ -973,9 +973,6 @@ function buildProjectIdSummary_(spreadsheet, options) {
 
     const refreshedMapData = mapLookup.byProjectId.get(project.key);
     const mapData = refreshedMapData || existingMapData.get(project.key) || {};
-    const deltaValues = PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
-      ? comparisonDeltas.get(project.key) || Array(PROJECT_ID_SUMMARY_DELTA_HEADERS.length).fill('')
-      : [];
     if (PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS && !comparisonDeltas.has(project.key)) {
       projectsWithoutComparisonDeltas += 1;
     }
@@ -989,6 +986,9 @@ function buildProjectIdSummary_(spreadsheet, options) {
       (cachedEnergyMetrics && (cachedEnergyMetrics.snapshotVersionId ||
         cachedEnergyMetrics.energyCalculationStatus) ? cachedEnergyMetrics :
         {energyCalculationStatus: 'Snapshot lookup pending; run refreshProjectIdSummary'});
+    const deltaValues = PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS
+      ? buildProjectIdSummaryDeltaValues_(comparisonDeltas.get(project.key), energyMetrics.activePanelCount)
+      : [];
     const benchArtPercent =
       calculateProjectIdSummaryBenchmarkMinusArtemisPercent_(
         email.latestBenchmarkProductionKwh,
@@ -2173,8 +2173,7 @@ function loadProjectIdSummaryAttachmentCounts_(spreadsheet) {
 }
 
 /**
- * Loads the final Delta values from each project's recalculated comparison row.
- * Values remain blank when the comparison row or individual metric is missing.
+ * Loads the Aurora panel count and other deltas from each recalculated comparison row.
  */
 function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
   if (!PROJECT_ID_SUMMARY_ENABLE_COMPARISON_DELTAS) return new Map();
@@ -2198,7 +2197,12 @@ function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
     'Match Type',
     sheet.getName(),
   );
-  const deltaIndexes = PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS.map(
+  const auroraPanelHeader = headers.includes('PDF Panel Count') && !headers.includes('Aurora Panel Count')
+    ? 'PDF Panel Count'
+    : 'Aurora Panel Count';
+  const comparisonHeaders = [auroraPanelHeader]
+    .concat(PROJECT_ID_SUMMARY_COMPARISON_DELTA_HEADERS.slice(1));
+  const comparisonIndexes = comparisonHeaders.map(
     (header) =>
       requireProjectIdSummaryHeader_(headers, header, sheet.getName()),
   );
@@ -2208,20 +2212,20 @@ function loadProjectIdSummaryComparisonDeltas_(spreadsheet) {
     if (matchType !== PROJECT_ID_SUMMARY_CONFIG.COMPARISON_MATCH_TYPE) return;
     const projectId = String(row[projectIdIndex] || '').trim().toLowerCase();
     if (!isProjectIdSummaryUuid_(projectId)) return;
-    const comparisonValues = deltaIndexes.map((index) =>
+    const comparisonValues = comparisonIndexes.map((index) =>
       Number.isFinite(row[index]) ? row[index] : '',
     );
-    byProjectId.set(
-      projectId,
-      buildProjectIdSummaryDeltaValues_(comparisonValues),
-    );
+    byProjectId.set(projectId, comparisonValues);
   });
   return byProjectId;
 }
 
-function buildProjectIdSummaryDeltaValues_(comparisonValues) {
-  const deltaAzimuth = comparisonValues[1];
-  const deltaPitch = comparisonValues[2];
+function buildProjectIdSummaryDeltaValues_(comparisonValues, activePanelCount) {
+  if (!comparisonValues) return PROJECT_ID_SUMMARY_DELTA_HEADERS.map(() => '');
+  const [auroraPanelCount, deltaAzimuth, deltaPitch, ...remainingDeltas] = comparisonValues;
+  const deltaPanelCount = Number.isFinite(activePanelCount) && Number.isFinite(auroraPanelCount)
+    ? activePanelCount - auroraPanelCount
+    : '';
   const hasDeltaAzimuth = Number.isFinite(deltaAzimuth);
   const hasDeltaPitch = Number.isFinite(deltaPitch);
   const absoluteDeltaAzimuth = hasDeltaAzimuth
@@ -2233,16 +2237,16 @@ function buildProjectIdSummaryDeltaValues_(comparisonValues) {
     : '';
 
   return [
-    comparisonValues[0],
+    deltaPanelCount,
     deltaAzimuth,
     absoluteDeltaAzimuth,
     deltaPitch,
     absoluteDeltaPitch,
     absoluteAzimuthAndPitch,
-  ].concat(comparisonValues.slice(3));
+  ].concat(remainingDeltas);
 }
 
-/** Restore the saved Shade Reports Comparison results without fetching new data. */
+/** Rebuild comparison deltas from the saved source and summary rows. */
 function restoreProjectIdSummaryComparisonDeltas() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) throw new Error('Another GoodLeap execution is running; retry when it finishes.');
@@ -2252,9 +2256,14 @@ function restoreProjectIdSummaryComparisonDeltas() {
     if (!sheet || sheet.getLastRow() < 2) throw new Error('Project ID Summary has no project rows.');
     const deltas = loadProjectIdSummaryComparisonDeltas_(spreadsheet);
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
-    const ids = sheet.getRange(2, projectIdSummaryColumn_('Project ID'), sheet.getLastRow() - 1, 1).getValues();
-    const blank = PROJECT_ID_SUMMARY_ACTIVE_DELTA_HEADERS.map(() => '');
-    const rows = ids.map(([id]) => deltas.get(String(id).trim().toLowerCase()) || blank);
+    const rowCount = sheet.getLastRow() - 1;
+    const ids = sheet.getRange(2, projectIdSummaryColumn_('Project ID'), rowCount, 1).getValues();
+    const activePanelColumn = requireProjectIdSummaryHeader_(headers, 'active_panel_count', sheet.getName()) + 1;
+    const activePanelCounts = sheet.getRange(2, activePanelColumn, rowCount, 1).getValues();
+    const rows = ids.map(([id], index) => buildProjectIdSummaryDeltaValues_(
+      deltas.get(String(id).trim().toLowerCase()),
+      activePanelCounts[index][0],
+    ));
     const populated = rows.filter(row => row.some(Number.isFinite)).length;
     if (!populated) throw new Error('No numeric comparison results match the current summary. No cells changed.');
     insertProjectIdSummaryDeltaColumns_(sheet, headers);

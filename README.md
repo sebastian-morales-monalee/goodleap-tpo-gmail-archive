@@ -20,7 +20,9 @@ No web-app deployment is required.
 
 Project ID Summary shows the 21 Aurora–Artemis comparison columns at AX:BR.
 They follow Status Order and read the saved Recalculated Weighted Average row
-in Shade Reports Comparison by Project ID. Missing comparisons remain blank.
+in Shade Reports Comparison by Project ID. Delta Panel Count (AX) subtracts
+that row's Aurora Panel Count from the summary's active_panel_count (H).
+AX stays blank when either count is missing.
 Engine Version is at BS, with project dates at BT:BW.
 The date block continues with Latest AI Email Received At (BX), First Email
 Received At (BY), Last Email Received At (BZ), Days Between First and Last Email
@@ -417,9 +419,10 @@ It:
   metadata is still incomplete. Previous successful values survive temporary
   PostHog errors.
 - Omits Organization from the reader-facing output.
-- Copies Delta Panel Count, aggregate Azimuth and Pitch deltas, annual TOF,
-  Solar Access, TSRF, and Jan-Dec deltas from each project's `Recalculated
-  Weighted Average` row in `Shade Reports Comparison`.
+- Calculates Delta Panel Count from the summary's active count and the Aurora
+  count. Copies aggregate Azimuth and Pitch deltas, annual TOF, Solar Access,
+  TSRF, and Jan-Dec deltas from each project's `Recalculated Weighted Average`
+  row in `Shade Reports Comparison`.
 - Reads `project_status`, `production_engine_version`, `created_at`,
   `updated_at`, `last_status_updated_at`, and `design_updated_at` from the
   GoodLeap projects table, with Artemis Sales as fallback. The corresponding
@@ -1693,8 +1696,9 @@ The deployment is ready only when all of the following are true:
   analysis sheets, and shows the PostHog map source plus a clickable RGB
   basemap URL when available. Its `Production Category Group` uses the same
   exact `Categories`-based Production rule as the weekly dashboard. Its Delta
-  columns reproduce each project's `Recalculated Weighted Average` values from
-  `Shade Reports Comparison`. Columns R:U reproduce the Gmail Message ID and
+  columns use each project's `Recalculated Weighted Average` row from
+  `Shade Reports Comparison`. Delta Panel Count combines that row's Aurora count
+  with the summary's active panel count. Columns R:U reproduce the Gmail Message ID and
   three contextual AI fields, while V:Z contain the date, Proposed Production,
   Benchmark Production, the calculated `(Bench-Art)/Art %`, and the source
   `Tolerance %` from the same newest matching `AI Analysis` row. `Production
